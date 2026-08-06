@@ -4,20 +4,16 @@
 
 ## 🚀 快速安裝與環境設定
 
-### 1. 一鍵安裝 (當下即時生效)
+### 1. 一鍵安裝 (自動即時生效)
 在專案根目錄下執行：
 ```bash
-# 推薦方式：安裝並在當前視窗【即時啟用】所有指令與 Tab 自動補全
-source install.sh
-
-# 傳統方式：
 ./install.sh
 ```
 此動作會：
 1. 將 `bin/` 下所有指令軟連結（symlink）至 `~/.local/bin/`。
 2. 將全域設定檔軟連結至 `~/.config/favorite-bash/pr-merge.json`。
 3. 將專案入口與 Zsh Tab 補全載入點寫入 `~/.zshrc`。
-4. 使用 `source install.sh` 模式會在**當下視窗即時啟用**所有指令與 Tab 分支自動補全！
+4. **自動替換進程重載 Shell（`exec zsh`），當下視窗即時生效所有指令與 Tab 分支自動補全！無須輸入任何多餘指令。**
 
 ### 2. 環境變數確認 ($PATH)
 `~/.local/bin` 為 Unix/macOS 使用者自訂執行檔的標準目錄。
@@ -27,21 +23,15 @@ source install.sh
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-加入後執行 `source ~/.zshrc`，即可在終端機任意目錄下直接使用 `pr-merge`、`pr-review` 等指令！
-
 ---
 
-### 一鍵卸載
-在專案根目錄下執行（任選一種方式）：
+### 一鍵卸載 (自動即時失效)
+在專案根目錄下執行：
 
 ```bash
-# 方式 A：當下視窗直接清空記憶體快取並立刻失效 (推薦)
-source uninstall.sh
-
-# 方式 B：傳統執行
 ./uninstall.sh
 ```
-此動作會移除 `~/.local/bin/` 中屬於本專案的指令軟連結、清理 `~/.config/favorite-bash` 並移除 `~/.zshrc` 中的載入點。
+此動作會移除 `~/.local/bin/` 中屬於本專案的指令軟連結、清理 `~/.config/favorite-bash`、移除 `~/.zshrc` 中的載入點，並**自動重載 Shell 當下無感失效**。
 
 ---
 

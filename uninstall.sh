@@ -52,4 +52,9 @@ elif [ -n "$BASH_VERSION" ]; then
   hash -r 2>/dev/null || true
 fi
 
-echo -e "${GREEN}✨ 卸載完成！${RESET}\n"
+echo -e "${GREEN}✨ 卸載完成！已即時自動刷新 Shell 環境。${RESET}\n"
+
+# 5. 若為普通模式執行 (./uninstall.sh)，自動替換目前進程重載 Zsh，無須手動執行任何指令
+if [ -t 0 ] && [[ "$SHELL" == *"zsh"* ]] && [ -z "$ZSH_VERSION" ]; then
+  exec zsh
+fi

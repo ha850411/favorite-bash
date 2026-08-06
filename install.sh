@@ -46,7 +46,7 @@ if [[ -f "${ZSHRC}" ]]; then
   fi
 fi
 
-# 5. 若透過 source install.sh 執行，直接在當前進程內即時啟用補全與 Hash
+# 5. 若為 source 模式則即時載入
 if [ -n "$ZSH_VERSION" ]; then
   if [[ -f "${SCRIPT_DIR}/favorite-bash.zsh" ]]; then
     source "${SCRIPT_DIR}/favorite-bash.zsh" 2>/dev/null || true
@@ -54,12 +54,9 @@ if [ -n "$ZSH_VERSION" ]; then
   rehash 2>/dev/null || true
 fi
 
-echo -e "${GREEN}✨ 安裝完成！${RESET}"
+echo -e "${GREEN}✨ 安裝完成！已即時自動刷新 Shell 環境。${RESET}\n"
 
-if [ -n "$ZSH_VERSION" ]; then
-  echo -e "${GREEN}🎉 已在當前終端機視窗【即時啟用】所有指令與 Tab 自動補全！${RESET}\n"
-else
-  echo -e "${CYAN}💡 提示：若要在目前視窗即時生效所有指令與 Tab 自動補全，推薦執行：${RESET}"
-  echo -e "${GREEN}   source install.sh   (一鍵安裝並當下即時生效)${RESET}"
-  echo -e "${CYAN}   或執行: source ~/.zshrc${RESET}\n"
+# 6. 若為普通模式執行 (./install.sh)，自動替換目前進程重載 Zsh，無須手動執行任何指令
+if [ -t 0 ] && [[ "$SHELL" == *"zsh"* ]] && [ -z "$ZSH_VERSION" ]; then
+  exec zsh
 fi
