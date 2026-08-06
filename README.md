@@ -12,10 +12,11 @@
 此動作會：
 1. 將 `bin/` 下所有指令軟連結（symlink）至 `~/.local/bin/`。
 2. 將全域設定檔軟連結至 `~/.config/favorite-bash/pr-merge.json`。
+3. 將專案入口與 Zsh Tab 補全載入點寫入 `~/.zshrc`。
 
 ### 2. 環境變數確認 ($PATH)
 `~/.local/bin` 為 Unix/macOS 使用者自訂執行檔的標準目錄。
-**並非所有使用者的預設 PATH 都包含此目錄**，請確保您的 `~/.zshrc`（或 `~/.bashrc`）包含以下設定：
+請確保您的 `~/.zshrc`（或 `~/.bashrc`）包含以下設定：
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
@@ -26,11 +27,16 @@ export PATH="$HOME/.local/bin:$PATH"
 ---
 
 ### 一鍵卸載
-在專案根目錄下執行：
+在專案根目錄下執行（任選一種方式）：
+
 ```bash
+# 方式 A：當下視窗直接清空記憶體快取並立刻失效 (推薦)
+source uninstall.sh
+
+# 方式 B：傳統執行
 ./uninstall.sh
 ```
-此動作會移除 `~/.local/bin/` 中屬於本專案的指令軟連結。
+此動作會移除 `~/.local/bin/` 中屬於本專案的指令軟連結、清理 `~/.config/favorite-bash` 並移除 `~/.zshrc` 中的載入點。
 
 ---
 

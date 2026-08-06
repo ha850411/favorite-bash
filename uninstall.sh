@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -e
+# Support both ./uninstall.sh and source uninstall.sh
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TARGET_BIN_DIR="${HOME}/.local/bin"
@@ -44,4 +44,12 @@ if [[ -f "${ZSHRC}" ]]; then
   fi
 fi
 
-echo -e "${GREEN}✨ 卸載完成！請執行 'rehash' 或開啟新終端機視窗。${RESET}\n"
+# 4. 若透過 source uninstall.sh 執行，直接清空當前視窗記憶體快取與函式定義
+if [ -n "$ZSH_VERSION" ]; then
+  rehash 2>/dev/null || true
+  unfunction pr-merge pr-review pr-reviews 2>/dev/null || true
+elif [ -n "$BASH_VERSION" ]; then
+  hash -r 2>/dev/null || true
+fi
+
+echo -e "${GREEN}✨ 卸載完成！${RESET}\n"
