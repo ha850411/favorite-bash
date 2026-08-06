@@ -44,4 +44,4 @@ if [[ -f "${ZSHRC}" ]]; then
   fi
 fi
 
-echo -e "${GREEN}✨ 卸載完成！${RESET}"
+echo -e "${GREEN}✨ 卸載完成！請執行 'rehash' 或開啟新終端機視窗。${RESET}\n"
