@@ -31,4 +31,12 @@ if [[ -f "${SCRIPT_DIR}/pr-merge.json" ]]; then
   echo -e "  ${GREEN}✔${RESET} 建立設定檔軟連結: ${TARGET_CONFIG_DIR}/pr-merge.json -> ${SCRIPT_DIR}/pr-merge.json"
 fi
 
-echo -e "${GREEN}✨ 安裝完成！所有指令已透過 ~/.local/bin 獨立運行。${RESET}"
+echo -e "${GREEN}✨ 安裝完成！${RESET}"
+
+# 4. 檢查 PATH 環境變數是否包含 ~/.local/bin
+if [[ ":$PATH:" != *":${TARGET_BIN_DIR}:"* ]]; then
+  echo -e "\n${YELLOW}⚠️  提示：您的 PATH 環境變數中尚未包含 ${TARGET_BIN_DIR}${RESET}"
+  echo -e "請將以下設定加入您的 Shell 配置檔（如 ~/.zshrc 或 ~/.bashrc）："
+  echo -e "${CYAN}  export PATH=\"\$HOME/.local/bin:\$PATH\"${RESET}"
+  echo -e "加入後請執行 'source ~/.zshrc' 即可在任意目錄使用指令。\n"
+fi
