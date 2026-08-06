@@ -31,12 +31,19 @@ if [[ -f "${SCRIPT_DIR}/pr-merge.json" ]]; then
   echo -e "  ${GREEN}✔${RESET} 建立設定檔軟連結: ${TARGET_CONFIG_DIR}/pr-merge.json -> ${SCRIPT_DIR}/pr-merge.json"
 fi
 
-echo -e "${GREEN}✨ 安裝完成！${RESET}"
+# 4. 檢查並將引用設定寫入 ~/.zshrc (載入 Zsh Tab Autocomplete 自動補全)
+ZSHRC="${HOME}/.zshrc"
+SOURCE_LINE="[[ -f \"${SCRIPT_DIR}/pr-review.zsh\" ]] && source \"${SCRIPT_DIR}/pr-review.zsh\""
 
-# 4. 檢查 PATH 環境變數是否包含 ~/.local/bin
-if [[ ":$PATH:" != *":${TARGET_BIN_DIR}:"* ]]; then
-  echo -e "\n${YELLOW}⚠️  提示：您的 PATH 環境變數中尚未包含 ${TARGET_BIN_DIR}${RESET}"
-  echo -e "請將以下設定加入您的 Shell 配置檔（如 ~/.zshrc 或 ~/.bashrc）："
-  echo -e "${CYAN}  export PATH=\"\$HOME/.local/bin:\$PATH\"${RESET}"
-  echo -e "加入後請執行 'source ~/.zshrc' 即可在任意目錄使用指令。\n"
+if [[ -f "${ZSHRC}" ]]; then
+  if ! grep -qF "${SCRIPT_DIR}/pr-review.zsh" "${ZSHRC}"; then
+    echo "" >> "${ZSHRC}"
+    echo "# favorite-bash" >> "${ZSHRC}"
+    echo "${SOURCE_LINE}" >> "${ZSHRC}"
+    echo -e "  ${GREEN}✔${RESET} 已將引用與 Tab 補全設定寫入 ${ZSHRC}"
+  else
+    echo -e "  ${YELLOW}ℹ${RESET} ${ZSHRC} 中已包含引用與 Tab 補全設定，跳過寫入"
+  fi
 fi
+
+echo -e "${GREEN}✨ 安裝完成！請執行 'source ~/.zshrc' 或重新開啟終端機。${RESET}\n"
