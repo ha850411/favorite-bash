@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-set -e
+# Support both ./install.sh and source install.sh
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TARGET_BIN_DIR="${HOME}/.local/bin"
@@ -46,4 +46,20 @@ if [[ -f "${ZSHRC}" ]]; then
   fi
 fi
 
-echo -e "${GREEN}✨ 安裝完成！請執行 'source ~/.zshrc' 或重新開啟終端機。${RESET}\n"
+# 5. 若透過 source install.sh 執行，直接在當前進程內即時啟用補全與 Hash
+if [ -n "$ZSH_VERSION" ]; then
+  if [[ -f "${SCRIPT_DIR}/favorite-bash.zsh" ]]; then
+    source "${SCRIPT_DIR}/favorite-bash.zsh" 2>/dev/null || true
+  fi
+  rehash 2>/dev/null || true
+fi
+
+echo -e "${GREEN}✨ 安裝完成！${RESET}"
+
+if [ -n "$ZSH_VERSION" ]; then
+  echo -e "${GREEN}🎉 已在當前終端機視窗【即時啟用】所有指令與 Tab 自動補全！${RESET}\n"
+else
+  echo -e "${CYAN}💡 提示：若要在目前視窗即時生效所有指令與 Tab 自動補全，推薦執行：${RESET}"
+  echo -e "${GREEN}   source install.sh   (一鍵安裝並當下即時生效)${RESET}"
+  echo -e "${CYAN}   或執行: source ~/.zshrc${RESET}\n"
+fi

@@ -4,15 +4,20 @@
 
 ## 🚀 快速安裝與環境設定
 
-### 1. 一鍵安裝
+### 1. 一鍵安裝 (當下即時生效)
 在專案根目錄下執行：
 ```bash
+# 推薦方式：安裝並在當前視窗【即時啟用】所有指令與 Tab 自動補全
+source install.sh
+
+# 傳統方式：
 ./install.sh
 ```
 此動作會：
 1. 將 `bin/` 下所有指令軟連結（symlink）至 `~/.local/bin/`。
 2. 將全域設定檔軟連結至 `~/.config/favorite-bash/pr-merge.json`。
 3. 將專案入口與 Zsh Tab 補全載入點寫入 `~/.zshrc`。
+4. 使用 `source install.sh` 模式會在**當下視窗即時啟用**所有指令與 Tab 分支自動補全！
 
 ### 2. 環境變數確認 ($PATH)
 `~/.local/bin` 為 Unix/macOS 使用者自訂執行檔的標準目錄。
