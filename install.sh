@@ -31,18 +31,18 @@ if [[ -f "${SCRIPT_DIR}/pr-merge.json" ]]; then
   echo -e "  ${GREEN}✔${RESET} 建立設定檔軟連結: ${TARGET_CONFIG_DIR}/pr-merge.json -> ${SCRIPT_DIR}/pr-merge.json"
 fi
 
-# 4. 檢查並將引用設定寫入 ~/.zshrc (載入 Zsh Tab Autocomplete 自動補全)
+# 4. 檢查並將專案入口引用寫入 ~/.zshrc (載入 Zsh Tab Autocomplete 自動補全)
 ZSHRC="${HOME}/.zshrc"
-SOURCE_LINE="[[ -f \"${SCRIPT_DIR}/pr-review.zsh\" ]] && source \"${SCRIPT_DIR}/pr-review.zsh\""
+SOURCE_LINE="[[ -f \"${SCRIPT_DIR}/favorite-bash.zsh\" ]] && source \"${SCRIPT_DIR}/favorite-bash.zsh\""
 
 if [[ -f "${ZSHRC}" ]]; then
-  if ! grep -qF "${SCRIPT_DIR}/pr-review.zsh" "${ZSHRC}"; then
+  if ! grep -qF "${SCRIPT_DIR}/favorite-bash.zsh" "${ZSHRC}"; then
     echo "" >> "${ZSHRC}"
     echo "# favorite-bash" >> "${ZSHRC}"
     echo "${SOURCE_LINE}" >> "${ZSHRC}"
-    echo -e "  ${GREEN}✔${RESET} 已將引用與 Tab 補全設定寫入 ${ZSHRC}"
+    echo -e "  ${GREEN}✔${RESET} 已將專案入口與 Tab 補全設定寫入 ${ZSHRC}"
   else
-    echo -e "  ${YELLOW}ℹ${RESET} ${ZSHRC} 中已包含引用與 Tab 補全設定，跳過寫入"
+    echo -e "  ${YELLOW}ℹ${RESET} ${ZSHRC} 中已包含專案入口設定，跳過寫入"
   fi
 fi
 
