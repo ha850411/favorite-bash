@@ -2,7 +2,29 @@
 
 個人常用的自定義 Shell 指令與自動化工具集合。
 
-## 指令列表
+## 🚀 快速安裝 / 卸載
+
+### 一鍵安裝
+在專案根目錄下執行：
+```bash
+./install.sh
+```
+此動作會：
+1. 將 `bin/` 下所有指令軟連結（symlink）至 `~/.local/bin/`。
+2. 自動將 `pr-review.zsh` 引用路徑寫入 `~/.zshrc`（如尚未寫入）。
+
+### 一鍵卸載
+在專案根目錄下執行：
+```bash
+./uninstall.sh
+```
+此動作會：
+1. 移除 `~/.local/bin/` 中屬於本專案的指令軟連結。
+2. 清理 `~/.zshrc` 中的引用設定。
+
+---
+
+## 🛠 指令列表
 
 ### 1. `pr-review`
 批次審核並 Approve 指定的 GitHub Pull Request 網址。
@@ -36,20 +58,3 @@ pr-reviews
 - `a`: 全選 / 全部取消
 - `Enter`: 執行批次 Approve
 - `q`: 離開選單
-
----
-
-## 本機連結設定
-
-本專案的 `bin/pr-review` 與 `bin/pr-reviews` 軟連結（symlink）至本機 `~/.local/bin/`：
-
-```bash
-ln -sf /Volumes/workspace/favorite-bash/bin/pr-review ~/.local/bin/pr-review
-ln -sf /Volumes/workspace/favorite-bash/bin/pr-reviews ~/.local/bin/pr-reviews
-```
-
-或是於 `~/.zshrc` 中引用：
-
-```zsh
-source /Volumes/workspace/favorite-bash/pr-review.zsh
-```
