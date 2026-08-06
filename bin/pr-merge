@@ -1,0 +1,705 @@
+#!/usr/bin/env zsh
+# ==============================================================================
+# Favorite Bash - gh PR Merge Tool (pr-merge)
+# 快速跨 Repositories 掃描分支、檢查檔案變更並批次發起/合併 PR
+# ==============================================================================
+
+_PR_MERGE_RED=$'\033[1;31m'
+_PR_MERGE_GREEN=$'\033[1;32m'
+_PR_MERGE_YELLOW=$'\033[1;33m'
+_PR_MERGE_CYAN=$'\033[1;36m'
+_PR_MERGE_BOLD=$'\033[1m'
+_PR_MERGE_DIM=$'\033[2m'
+_PR_MERGE_RESET=$'\033[0m'
+
+# Dynamically locate the configuration file (prioritize project repo & favorite-bash repo)
+function _pr_merge_find_config_file() {
+  local project_root=""
+  project_root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+
+  # 1. Search in current working directory or git project repository
+  if [[ -f "$PWD/.pr-merge.json" ]]; then
+    echo "$PWD/.pr-merge.json"
+    return 0
+  elif [[ -f "$PWD/pr-merge.json" ]]; then
+    echo "$PWD/pr-merge.json"
+    return 0
+  elif [[ -n "$project_root" && "$project_root" != "$HOME" ]]; then
+    if [[ -f "${project_root}/.pr-merge.json" ]]; then
+      echo "${project_root}/.pr-merge.json"
+      return 0
+    elif [[ -f "${project_root}/pr-merge.json" && "${project_root}" != "${HOME}/.local" ]]; then
+      echo "${project_root}/pr-merge.json"
+      return 0
+    fi
+  fi
+
+  # 2. Search tool directory config (favorite-bash repo config)
+  local script_dir="${0:A:h}"
+  local tool_dir="${script_dir:h}"
+  if [[ -f "${tool_dir}/pr-merge.json" ]]; then
+    echo "${tool_dir}/pr-merge.json"
+    return 0
+  fi
+
+  # 3. Search user home config ~/.config/favorite-bash/pr-merge.json
+  if [[ -f "${HOME}/.config/favorite-bash/pr-merge.json" ]]; then
+    echo "${HOME}/.config/favorite-bash/pr-merge.json"
+    return 0
+  elif [[ -f "${HOME}/.pr-merge.json" ]]; then
+    echo "${HOME}/.pr-merge.json"
+    return 0
+  fi
+
+  # 4. Default creation path
+  echo "${tool_dir}/pr-merge.json"
+}
+
+# Ensure configuration file exists with default values
+function _pr_merge_ensure_config() {
+  local config_path
+  config_path="$(_pr_merge_find_config_file)"
+
+  local config_dir="${config_path:h}"
+  if [[ ! -d "$config_dir" ]]; then
+    mkdir -p "$config_dir"
+  fi
+
+  if [[ ! -f "$config_path" ]]; then
+    local default_repo=""
+    default_repo="$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || echo "owner/example-repo")"
+    cat <<EOF > "$config_path"
+{
+  "default_target_base": "main",
+  "tracked_repos": [
+    "${default_repo}"
+  ],
+  "repos": {
+    "${default_repo}": {
+      "branch_rules": [
+        {
+          "pattern": "release/hotfix/*",
+          "base": "main"
+        },
+        {
+          "pattern": "release/*",
+          "base": "develop"
+        },
+        {
+          "pattern": "*",
+          "base": "main"
+        }
+      ]
+    }
+  }
+}
+EOF
+    echo "${_PR_MERGE_CYAN}💡 已建立設定檔：${_PR_MERGE_BOLD}${config_path}${_PR_MERGE_RESET}"
+    echo "${_PR_MERGE_DIM}您可以編輯此設定檔來新增各 Repository 不同的預設 Base 分支與 Pattern 規則。${_PR_MERGE_RESET}\n"
+  fi
+}
+
+# Read tracked repos array from config
+function _pr_merge_get_tracked_repos() {
+  _pr_merge_ensure_config
+  local config_path
+  config_path="$(_pr_merge_find_config_file)"
+  python3 -c "
+import json, sys
+try:
+    with open('${config_path}', 'r', encoding='utf-8') as f:
+        data = json.load(f)
+    repos = []
+    if 'tracked_repos' in data and isinstance(data['tracked_repos'], list):
+        repos.extend(data['tracked_repos'])
+    if 'repos' in data and isinstance(data['repos'], dict):
+        repos.extend(data['repos'].keys())
+
+    seen = set()
+    for r in repos:
+        if r and isinstance(r, str) and r not in seen:
+            seen.add(r)
+            print(r)
+except Exception:
+    pass
+"
+}
+
+# Edit configuration file
+function _pr_merge_open_config() {
+  _pr_merge_ensure_config
+  local config_path
+  config_path="$(_pr_merge_find_config_file)"
+  echo "${_PR_MERGE_CYAN}⚙️ 開啟設定檔：${_PR_MERGE_BOLD}${config_path}${_PR_MERGE_RESET}"
+  local editor="${EDITOR:-${VISUAL:-nano}}"
+  if command -v "$editor" &>/dev/null; then
+    "$editor" "$config_path"
+  else
+    echo "請使用您偏好的編輯器開啟：${config_path}"
+  fi
+}
+
+# Main entry point
+emulate -L zsh
+setopt multibyte extendedglob
+
+if ! command -v gh &>/dev/null; then
+  echo "${_PR_MERGE_RED}❌ 錯誤：未安裝 GitHub CLI ('gh')。${_PR_MERGE_RESET}"
+  echo "請使用 'brew install gh' 安裝並先執行 'gh auth login' 登入。"
+  exit 1
+fi
+
+_pr_merge_ensure_config
+current_config_file="$(_pr_merge_find_config_file)"
+
+arg_repo=""
+arg_base_of_b=""
+arg_title=""
+arg_body=""
+is_draft=false
+auto_yes=false
+do_auto_merge=true
+show_config=false
+show_help=false
+
+positional=()
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -r|--repo)
+      arg_repo="$2"
+      shift 2
+      ;;
+    -b|--base)
+      arg_base_of_b="$2"
+      shift 2
+      ;;
+    -t|--title)
+      arg_title="$2"
+      shift 2
+      ;;
+    -m|--body)
+      arg_body="$2"
+      shift 2
+      ;;
+    -d|--draft)
+      is_draft=true
+      shift
+      ;;
+    -M|--merge|--auto-merge)
+      do_auto_merge=true
+      shift
+      ;;
+    --no-merge)
+      do_auto_merge=false
+      shift
+      ;;
+    -y|--yes)
+      auto_yes=true
+      shift
+      ;;
+    -c|--config)
+      show_config=true
+      shift
+      ;;
+    -h|--help)
+      show_help=true
+      shift
+      ;;
+    config)
+      show_config=true
+      shift
+      ;;
+    help)
+      show_help=true
+      shift
+      ;;
+    -*)
+      echo "${_PR_MERGE_RED}❌ 未知的選項: $1${_PR_MERGE_RESET}"
+      exit 1
+      ;;
+    *)
+      positional+=("$1")
+      shift
+      ;;
+  esac
+done
+
+if [[ "$show_help" == true ]]; then
+  echo "${_PR_MERGE_BOLD}${_PR_MERGE_CYAN}pr-merge - GitHub PR 快速自動合併工具${_PR_MERGE_RESET}"
+  echo ""
+  echo "${_PR_MERGE_BOLD}使用方式：${_PR_MERGE_RESET}"
+  echo "  pr-merge [來源分支 A] [目標分支 B] [選項]"
+  echo "  pr-merge config                        編輯設定檔 (${current_config_file})"
+  echo ""
+  echo "${_PR_MERGE_BOLD}選項：${_PR_MERGE_RESET}"
+  echo "  -r, --repo <owner/repo>     只針對特定的 GitHub Repository 進行操作"
+  echo "  -b, --base <branch>         當目標分支 B 不存在時，強制指定建立 B 分支所 base 的來源分支"
+  echo "  -M, --merge, --auto-merge   PR 建立或偵測已存在時，自動直接執行 PR Merge"
+  echo "  -t, --title <title>         指定 PR 標題"
+  echo "  -m, --body <body>           指定 PR 內容"
+  echo "  -d, --draft                 開立為 Draft PR"
+  echo "  -y, --yes                   跳過互動確認直接執行"
+  echo "  -c, --config                開啟設定檔 (${current_config_file})"
+  echo "  -h, --help                  顯示此說明訊息"
+  echo ""
+  echo "${_PR_MERGE_BOLD}範例：${_PR_MERGE_RESET}"
+  echo "  pr-merge feature/SERU-12705 release/SERVICE-0811"
+  echo "  pr-merge feature/SERU-12705 release/SERVICE-0811 -M"
+  echo "  pr-merge feature/SERU-12705 release/SERVICE-0811 -b develop"
+  echo "  pr-merge -r 104corp/104crm-c feature/SERU-12705 release/SERVICE-0811"
+  exit 0
+fi
+
+if [[ "$show_config" == true ]]; then
+  _pr_merge_open_config
+  exit 0
+fi
+
+branch_a="${positional[1]}"
+branch_b="${positional[2]}"
+
+if [[ -z "$branch_a" ]]; then
+  current_git_branch="$(git branch --show-current 2>/dev/null || true)"
+  if [[ -n "$current_git_branch" ]]; then
+    printf "${_PR_MERGE_YELLOW}請輸入來源分支 (Branch A) [預設: %s]: ${_PR_MERGE_RESET}" "$current_git_branch"
+    read -r input_a
+    branch_a="${input_a:-$current_git_branch}"
+  else
+    while [[ -z "$branch_a" ]]; do
+      printf "${_PR_MERGE_YELLOW}請輸入來源分支 (Branch A): ${_PR_MERGE_RESET}"
+      read -r branch_a
+    done
+  fi
+fi
+
+while [[ -z "$branch_b" ]]; do
+  printf "${_PR_MERGE_YELLOW}請輸入目標分支 (Branch B): ${_PR_MERGE_RESET}"
+  read -r branch_b
+done
+
+if [[ "$branch_a" == "$branch_b" ]]; then
+  echo "${_PR_MERGE_RED}❌ 來源分支 A 和目標分支 B 不能相同 (${branch_a})！${_PR_MERGE_RESET}"
+  exit 1
+fi
+
+python3 -c '
+import sys, os, subprocess, json, fnmatch, termios, tty
+
+C_CYAN = "\033[1;36m"
+C_GREEN = "\033[1;32m"
+C_YELLOW = "\033[1;33m"
+C_RED = "\033[1;31m"
+C_BOLD = "\033[1m"
+C_DIM = "\033[2m"
+C_RESET = "\033[0m"
+
+config_file = sys.argv[1]
+branch_a = sys.argv[2]
+branch_b = sys.argv[3]
+arg_repo = sys.argv[4]
+arg_base_of_b = sys.argv[5]
+arg_title = sys.argv[6]
+arg_body = sys.argv[7]
+is_draft = sys.argv[8] == "true"
+auto_yes = sys.argv[9] == "true"
+do_auto_merge = sys.argv[10] == "true"
+
+# Read config
+config_data = {}
+try:
+    with open(config_file, "r", encoding="utf-8") as f:
+        config_data = json.load(f)
+except Exception:
+    pass
+
+# Determine target repos list
+all_repos = []
+if arg_repo:
+    all_repos = [arg_repo]
+else:
+    tracked = config_data.get("tracked_repos", [])
+    repos_dict = config_data.get("repos", {})
+    seen = set()
+    for r in tracked + list(repos_dict.keys()):
+        if r and isinstance(r, str) and r not in seen:
+            seen.add(r)
+            all_repos.append(r)
+
+if not all_repos:
+    print(f"{C_RED}❌ 設定檔中沒有配置任何要追蹤的 Repositories。{C_RESET}")
+    sys.exit(1)
+
+def get_repo_default_base(repo, target_branch):
+    default_base = config_data.get("default_target_base", "main")
+    source_label = "全域預設"
+    repos = config_data.get("repos", {})
+    repo_cfg = repos.get(repo, {})
+    if isinstance(repo_cfg, dict):
+        if "default_base" in repo_cfg:
+            default_base = repo_cfg["default_base"]
+            source_label = "Repo 預設"
+
+        rules = repo_cfg.get("branch_rules", [])
+        for rule in rules:
+            pattern = rule.get("pattern", "")
+            target_base = rule.get("base", "")
+            if pattern and target_base and target_branch and fnmatch.fnmatch(target_branch, pattern):
+                default_base = target_base
+                if pattern == "*":
+                    source_label = "Repo 預設 (*)"
+                else:
+                    source_label = f"規則 ({pattern})"
+                break
+    return default_base, source_label
+
+def fetch_compare_diff(repo, head_branch, base_branch):
+    res = subprocess.run(["gh", "api", f"repos/{repo}/compare/{base_branch}...{head_branch}"], capture_output=True, text=True)
+    if res.returncode == 0 and res.stdout.strip():
+        try:
+            data = json.loads(res.stdout)
+            commits = data.get("commits", [])
+            files = data.get("files", [])
+            additions = sum(f.get("additions", 0) for f in files)
+            deletions = sum(f.get("deletions", 0) for f in files)
+            return {
+                "ahead_by": data.get("ahead_by", len(commits)),
+                "commits_count": len(commits),
+                "files_count": len(files),
+                "additions": additions,
+                "deletions": deletions,
+                "commits": commits,
+                "files": files
+            }
+        except Exception:
+            pass
+    return {
+        "ahead_by": 0,
+        "commits_count": 0,
+        "files_count": 0,
+        "additions": 0,
+        "deletions": 0,
+        "commits": [],
+        "files": []
+    }
+
+def check_existing_pr(repo, head_branch, base_branch):
+    res = subprocess.run(["gh", "pr", "list", "--repo", repo, "--head", head_branch, "--base", base_branch, "--state", "OPEN", "--json", "number,url,title"], capture_output=True, text=True)
+    if res.returncode == 0 and res.stdout.strip():
+        try:
+            prs = json.loads(res.stdout)
+            if prs and len(prs) > 0:
+                return prs[0]
+        except Exception:
+            pass
+    return None
+
+def get_single_key():
+    fd = sys.stdin.fileno()
+    if not os.isatty(fd):
+        return sys.stdin.read(1)
+    old_settings = termios.tcgetattr(fd)
+    try:
+        tty.setcbreak(fd)
+        ch = sys.stdin.read(1)
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+    return ch
+
+def clear_screen():
+    if sys.stdout.isatty():
+        sys.stdout.write("\033[H\033[J")
+        sys.stdout.flush()
+
+print(f"{C_CYAN}🔍 正在掃描 {len(all_repos)} 個 Repositories 中的分支與變更... (設定檔: {config_file}){C_RESET}")
+
+items = []
+for idx, repo in enumerate(all_repos, 1):
+    res_a = subprocess.run(["gh", "api", f"repos/{repo}/branches/{branch_a}", "--silent"], capture_output=True)
+    has_a = (res_a.returncode == 0)
+
+    has_b = False
+    if has_a:
+        res_b = subprocess.run(["gh", "api", f"repos/{repo}/branches/{branch_b}", "--silent"], capture_output=True)
+        has_b = (res_b.returncode == 0)
+
+    default_base, source_label = get_repo_default_base(repo, branch_b)
+    initial_base = arg_base_of_b if arg_base_of_b else default_base
+
+    # Check diff if Branch A exists
+    compare_target_base = branch_b if has_b else initial_base
+    diff_info = {"commits_count": 0, "files_count": 0, "additions": 0, "deletions": 0, "commits": [], "files": []}
+    if has_a:
+        diff_info = fetch_compare_diff(repo, branch_a, compare_target_base)
+
+    has_changes = diff_info["commits_count"] > 0
+    existing_pr = check_existing_pr(repo, branch_a, branch_b) if (has_a and has_b) else None
+
+    items.append({
+        "index": idx,
+        "repo": repo,
+        "has_a": has_a,
+        "has_b": has_b,
+        "default_base": default_base,
+        "selected_base": initial_base,
+        "source_label": source_label,
+        "diff": diff_info,
+        "has_changes": has_changes,
+        "existing_pr": existing_pr,
+        "selected": (has_a and (has_changes or existing_pr is not None))
+    })
+
+matched_count = sum(1 for item in items if item["has_a"])
+if matched_count == 0:
+    print(f"\n{C_YELLOW}⚠️ 在所有追蹤的 Repositories 中皆未找到來源分支 \"{branch_a}\"。{C_RESET}")
+    print(f"{C_DIM}請確認 Branch A 名稱是否正確並已 Push 到遠端。{C_RESET}")
+    sys.exit(0)
+
+# Interactive Review Loop (In-Place Screen Refresh)
+while True:
+    clear_screen()
+    merge_status_label = f"{C_GREEN}🟢 已開啟 (單鍵 m 切換，發起/偵測 PR 後會直接自動 Merge){C_RESET}" if do_auto_merge else f"{C_DIM}⚪ 已關閉 (單鍵 m 切換，僅發起/檢查 PR){C_RESET}"
+    print("=" * 80)
+    print(f" {C_BOLD}{C_CYAN}🔍 跨 Repository 掃描結果與 PR 管理 (來源: {branch_a} ➔ 目標: {branch_b}){C_RESET}")
+    print(f" {C_BOLD}⚡ 自動 Merge 模式:{C_RESET} {merge_status_label}")
+    print("=" * 80)
+
+    for item in items:
+        status_check = f"{C_GREEN}[✓]{C_RESET}" if item["selected"] else f"{C_DIM}[ ]{C_RESET}"
+        r_name = item["repo"]
+        repo_name = f"{C_BOLD}{r_name}{C_RESET}"
+        idx_num = item["index"]
+        diff = item["diff"]
+        ex_pr = item["existing_pr"]
+        
+        action_suffix = f" {C_GREEN}➔ 將【自動 Merge】{C_RESET}" if (do_auto_merge and item["selected"]) else ""
+
+        if not item["has_a"]:
+            print(f" {status_check} {idx_num}) {repo_name} {C_RED}(遠端未找到分支 {branch_a}){C_RESET}")
+        else:
+            if ex_pr:
+                pr_num = ex_pr.get("number", "")
+                pr_url = ex_pr.get("url", "")
+                b_desc = f"{C_CYAN}PR 已存在 (#{pr_num}): {pr_url}{C_RESET}{action_suffix}"
+                print(f" {status_check} {idx_num}) {repo_name} {C_GREEN}(PR 已存在 #{pr_num}){C_RESET}")
+                print(f"        • 狀態: {b_desc}")
+            elif not item["has_changes"]:
+                print(f" {status_check} {idx_num}) {repo_name} {C_YELLOW}(無檔案變更: 0 commits, +0/-0){C_RESET} {C_DIM}➔ 自動跳過{C_RESET}")
+            else:
+                c_cnt = diff["commits_count"]
+                f_cnt = diff["files_count"]
+                adds = diff["additions"]
+                dels = diff["deletions"]
+                diff_summary = f"{c_cnt} commits, {f_cnt} files (+{adds}/-{dels})"
+                if item["has_b"]:
+                    b_desc = f"{C_GREEN}遠端已存在 {branch_b}{C_RESET}{action_suffix}"
+                else:
+                    sel_b = item["selected_base"]
+                    s_lbl = item["source_label"]
+                    base_desc = f"{C_YELLOW}將自動建立並 Base 於: {sel_b}{C_RESET} {C_DIM}({s_lbl}){C_RESET}"
+                    b_desc = f"{C_YELLOW}遠端尚未建立 {branch_b}{C_RESET} ➔ {base_desc}{action_suffix}"
+                
+                print(f" {status_check} {idx_num}) {repo_name} {C_GREEN}(有檔案變更: {diff_summary}){C_RESET}")
+                print(f"        • 目標分支 B: {b_desc}")
+
+    print("=" * 80)
+
+    selected_items = [it for it in items if it["selected"]]
+    
+    if auto_yes:
+        break
+
+    exec_action_text = f"{C_GREEN}發起/檢查 PR 並直接 Merge{C_RESET}" if do_auto_merge else f"發起/檢查 PR"
+
+    print(f"{C_BOLD}請按按鍵進行操作 (單鍵即時響應，零延遲原地刷新)：{C_RESET}")
+    print(f"  • 按 {C_GREEN}y{C_RESET} 或 {C_GREEN}Enter{C_RESET} : 確認執行勾選的 {len(selected_items)} 個 Repos ({exec_action_text})")
+    print(f"  • 按 {C_YELLOW}m{C_RESET}        : 切換【自動 Merge 模式】 (零延遲原地切換)")
+    print(f"  • 按 {C_YELLOW}b{C_RESET}        : 選擇並修改某個 Repo 建立 Branch B 時的 Base 分支")
+    print(f"  • 按 {C_CYAN}1-{len(items)}{C_RESET}      : 即時勾選 / 取消勾選指定 Repo")
+    print(f"  • 按 {C_RED}q{C_RESET}        : 取消操作並退出")
+    print("")
+    print(f"{C_YELLOW}👉 請按下按鍵 [y/m/b/1-{len(items)}/q]: {C_RESET}", end="", flush=True)
+
+    try:
+        ch = get_single_key()
+    except (EOFError, KeyboardInterrupt):
+        print(f"\n{C_DIM}已取消操作。{C_RESET}")
+        sys.exit(0)
+
+    if ch in ["y", "Y", "\n", "\r"]:
+        print(ch)
+        break
+    elif ch in ["q", "Q", "\x03"]:
+        print(ch)
+        print(f"\n{C_DIM}已取消操作。{C_RESET}")
+        sys.exit(0)
+
+    # Instant Single-Key Toggle Auto-Merge mode with screen clear
+    elif ch in ["m", "M"]:
+        do_auto_merge = not do_auto_merge
+        continue
+
+    # Interactive Base Branch Modification Sub-menu
+    elif ch in ["b", "B"]:
+        print(ch)
+        try:
+            sub_input = input(f"{C_YELLOW}請輸入要修改 Base 分支的 Repo 編號 [1-{len(items)}]: {C_RESET}").strip()
+            if sub_input.isdigit():
+                target_idx = int(sub_input)
+                match_item = next((it for it in items if it["index"] == target_idx), None)
+                if match_item:
+                    if match_item["has_b"]:
+                        print(f"{C_YELLOW}⚠️ 注意：{match_item['repo']} 的 Branch B ({branch_b}) 遠端已存在，無需選擇 Base。{C_RESET}")
+                        input("按 Enter 繼續...")
+                        continue
+
+                    r_name = match_item["repo"]
+                    curr_base = match_item["selected_base"]
+
+                    print(f"\n{C_CYAN}📌 請選擇 {r_name} 建立 {branch_b} 的 Base 分支：{C_RESET}")
+                    base_options = ["develop", "main", "develop-k8s", "develop_static"]
+                    if curr_base not in base_options:
+                        base_options.insert(0, curr_base)
+
+                    for b_idx, b_opt in enumerate(base_options, 1):
+                        mark = f"{C_GREEN}(目前選擇){C_RESET}" if b_opt == curr_base else ""
+                        print(f"  {b_idx}) {b_opt} {mark}")
+                    print(f"  {len(base_options)+1}) 手動輸入自訂分支名稱...")
+
+                    b_choice = input(f"{C_YELLOW}請選擇選項 [1-{len(base_options)+1}] (預設: 1): {C_RESET}").strip()
+
+                    new_base = ""
+                    if not b_choice or b_choice == "1":
+                        new_base = base_options[0]
+                    elif b_choice.isdigit() and 1 <= int(b_choice) <= len(base_options):
+                        new_base = base_options[int(b_choice) - 1]
+                    elif b_choice.isdigit() and int(b_choice) == len(base_options) + 1:
+                        custom_input = input(f"{C_YELLOW}請輸入自訂 Base 分支名稱: {C_RESET}").strip()
+                        if custom_input:
+                            new_base = custom_input
+                    else:
+                        new_base = b_choice
+
+                    if new_base:
+                        match_item["selected_base"] = new_base
+                        match_item["source_label"] = "手動指定"
+                        
+                        match_item["diff"] = fetch_compare_diff(r_name, branch_a, new_base)
+                        match_item["has_changes"] = match_item["diff"]["commits_count"] > 0
+                        match_item["selected"] = match_item["has_changes"]
+                        
+                        print(f"{C_GREEN}✔ 已將 {r_name} 的 Branch B Base 成功更新為 \"{new_base}\"！{C_RESET}")
+                        input("按 Enter 繼續...")
+                else:
+                    print(f"{C_RED}❌ 找不到編號為 {target_idx} 的 Repo。{C_RESET}")
+                    input("按 Enter 繼續...")
+        except (EOFError, KeyboardInterrupt):
+            continue
+
+    elif ch.isdigit():
+        target_idx = int(ch)
+        match_item = next((it for it in items if it["index"] == target_idx), None)
+        if match_item:
+            if not match_item["has_a"]:
+                r_name = match_item["repo"]
+                print(f"\n{C_YELLOW}⚠️ 注意：Repo {r_name} 遠端未找到 Branch A ({branch_a})。{C_RESET}")
+            elif not match_item["has_changes"] and not match_item["existing_pr"]:
+                r_name = match_item["repo"]
+                print(f"\n{C_YELLOW}⚠️ 注意：Repo {r_name} 沒有檔案變更 (0 commits)。{C_RESET}")
+            
+            match_item["selected"] = not match_item["selected"]
+
+if not selected_items:
+    print(f"{C_YELLOW}沒有勾選任何要執行的 Repository，已結束。{C_RESET}")
+    sys.exit(0)
+
+# Execute Batch PR / Merge Operations
+print(f"\n{C_CYAN}🚀 開始批次執行 {len(selected_items)} 個 Repositories 的 Branch B 建立、PR 發起與 Merge...{C_RESET}\n")
+
+for item in selected_items:
+    repo = item["repo"]
+    selected_base = item["selected_base"]
+    has_b = item["has_b"]
+    diff = item["diff"]
+    ex_pr = item["existing_pr"]
+
+    print("-" * 80)
+    print(f"{C_BOLD}📦 [{repo}]{C_RESET}")
+
+    # Step A: Create Branch B if missing
+    if not has_b:
+        base_sha_res = subprocess.run(["gh", "api", f"repos/{repo}/git/ref/heads/{selected_base}", "--jq", ".object.sha"], capture_output=True, text=True)
+        base_sha = base_sha_res.stdout.strip()
+        if not base_sha:
+            print(f"  {C_RED}❌ 錯誤：遠端不存在 Base 分支 \"{selected_base}\"，無法建立 \"{branch_b}\"。跳過此 Repo。{C_RESET}")
+            continue
+
+        print(f"  {C_CYAN}🔨 正在基於 \"{selected_base}\" ({base_sha[:7]}) 建立遠端分支 \"{branch_b}\"...{C_RESET}")
+        create_res = subprocess.run(["gh", "api", f"repos/{repo}/git/refs", "-f", f"ref=refs/heads/{branch_b}", "-f", f"sha={base_sha}", "--silent"])
+        if create_res.returncode == 0:
+            print(f"  {C_GREEN}✔ 已成功建立遠端分支 \"{branch_b}\" (based on \"{selected_base}\")！{C_RESET}")
+        else:
+            print(f"  {C_RED}❌ 建立遠端分支 \"{branch_b}\" 失敗！跳過此 Repo。{C_RESET}")
+            continue
+
+    # Step B: PR Resolution (Existing vs New)
+    pr_url = ""
+    pr_num = None
+
+    if ex_pr:
+        pr_url = ex_pr.get("url", "")
+        pr_num = ex_pr.get("number", "")
+        pr_title_val = ex_pr.get("title", "")
+        print(f"  {C_CYAN}ℹ️ 偵測到 PR 已存在：#{pr_num} ({pr_title_val}){C_RESET}")
+        print(f"  {C_BOLD}🔗 {pr_url}{C_RESET}")
+    else:
+        commits = diff.get("commits", [])
+        files = diff.get("files", [])
+        pr_t = arg_title if arg_title else f"Merge {branch_a} into {branch_b}"
+        
+        if arg_body:
+            pr_b = arg_body
+        else:
+            body_lines = [f"## 🔀 Merge `{branch_a}` into `{branch_b}`", "", "### 📜 Merged Commits:"]
+            for c in commits[:20]:
+                sha = c.get("sha", "")[:7]
+                msg = c.get("commit", {}).get("message", "").split("\n")[0]
+                body_lines.append(f"- [{sha}] {msg}")
+            if len(commits) > 20:
+                body_lines.append(f"- ... and {len(commits) - 20} more commits")
+            pr_b = "\n".join(body_lines)
+
+        print(f"  {C_CYAN}🚀 發起 Pull Request ({len(commits)} commits, {len(files)} files)...{C_RESET}")
+        gh_cmd = ["gh", "pr", "create", "--repo", repo, "--head", branch_a, "--base", branch_b, "--title", pr_t, "--body", pr_b]
+        if is_draft:
+            gh_cmd.append("--draft")
+
+        pr_res = subprocess.run(gh_cmd, capture_output=True, text=True)
+        if pr_res.returncode == 0 and pr_res.stdout.strip():
+            pr_url = pr_res.stdout.strip()
+            print(f"  {C_GREEN}✨ PR 建立成功！{C_RESET}")
+            print(f"  {C_BOLD}🔗 {pr_url}{C_RESET}")
+        else:
+            err_msg = pr_res.stderr.strip() if pr_res.stderr else "未知錯誤"
+            print(f"  {C_RED}❌ PR 建立失敗: {err_msg}{C_RESET}")
+
+    # Step C: Merge PR if requested
+    if do_auto_merge and pr_url:
+        print(f"  {C_CYAN}🔀 正在將 PR 合併進 {branch_b}...{C_RESET}")
+        m_res = subprocess.run(["gh", "pr", "merge", pr_url, "--repo", repo, "--merge"], capture_output=True, text=True)
+        if m_res.returncode == 0:
+            print(f"  {C_GREEN}✨ PR 已成功合併進 {branch_b}！{C_RESET}")
+        else:
+            # Fallback to --auto or --admin
+            m_auto = subprocess.run(["gh", "pr", "merge", pr_url, "--repo", repo, "--auto", "--merge"], capture_output=True, text=True)
+            if m_auto.returncode == 0:
+                print(f"  {C_GREEN}✨ PR 已設定為 Auto-Merge！{C_RESET}")
+            else:
+                m_err = m_res.stderr.strip() if m_res.stderr else "無法執行 Merge"
+                print(f"  {C_RED}⚠️ 自動 Merge 失敗: {m_err}{C_RESET}")
+
+print("")
+print("=" * 80)
+print(f" {C_GREEN}✨ 所有選取 Repositories 的 PR 與 Merge 作業已執行完成！{C_RESET}")
+print("=" * 80)
+' "$current_config_file" "$branch_a" "$branch_b" "$arg_repo" "$arg_base_of_b" "$arg_title" "$arg_body" "$is_draft" "$auto_yes" "$do_auto_merge"

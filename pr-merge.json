@@ -1,0 +1,101 @@
+{
+  "default_target_base": "develop",
+  "tracked_repos": [
+    "104corp/104crm-laravel",
+    "104corp/104crm-laravel-api",
+    "104corp/104crm-laravel-aes",
+    "104corp/104crm-dashboard",
+    "104corp/104crm-b",
+    "104corp/104crm-c",
+    "104corp/104crm-wsp-jb-b",
+    "104corp/104crm-lib",
+    "104corp/104-service-km"
+  ],
+  "repos": {
+    "104corp/104crm-laravel": {
+      "default_base": "develop",
+      "branch_rules": [
+        {
+          "pattern": "release/*",
+          "base": "develop"
+        }
+      ]
+    },
+    "104corp/104crm-laravel-api": {
+      "default_base": "develop-k8s",
+      "branch_rules": [
+        {
+          "pattern": "release/*",
+          "base": "develop-k8s"
+        }
+      ]
+    },
+    "104corp/104crm-laravel-aes": {
+      "default_base": "develop",
+      "branch_rules": [
+        {
+          "pattern": "release/*",
+          "base": "develop"
+        }
+      ]
+    },
+    "104corp/104crm-dashboard": {
+      "default_base": "develop",
+      "branch_rules": [
+        {
+          "pattern": "release/*",
+          "base": "develop"
+        }
+      ]
+    },
+    "104corp/104crm-b": {
+      "default_base": "develop",
+      "branch_rules": [
+        {
+          "pattern": "*static*",
+          "base": "develop_static"
+        },
+        {
+          "pattern": "release/*",
+          "base": "develop"
+        }
+      ]
+    },
+    "104corp/104crm-c": {
+      "default_base": "develop",
+      "branch_rules": [
+        {
+          "pattern": "release/*",
+          "base": "develop"
+        }
+      ]
+    },
+    "104corp/104crm-wsp-jb-b": {
+      "default_base": "develop",
+      "branch_rules": [
+        {
+          "pattern": "release/*",
+          "base": "develop"
+        }
+      ]
+    },
+    "104corp/104crm-lib": {
+      "default_base": "develop",
+      "branch_rules": [
+        {
+          "pattern": "release/*",
+          "base": "develop"
+        }
+      ]
+    },
+    "104corp/104-service-km": {
+      "default_base": "develop",
+      "branch_rules": [
+        {
+          "pattern": "release/*",
+          "base": "develop"
+        }
+      ]
+    }
+  }
+}

@@ -3,6 +3,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TARGET_BIN_DIR="${HOME}/.local/bin"
+TARGET_CONFIG_DIR="${HOME}/.config/favorite-bash"
 
 GREEN='\033[1;32m'
 CYAN='\033[1;36m'
@@ -23,7 +24,14 @@ for cmd_path in "${SCRIPT_DIR}"/bin/*; do
   fi
 done
 
-# 3. 檢查並將引用設定寫入 ~/.zshrc
+# 3. 確保設定檔 pr-merge.json 軟連結至 ~/.config/favorite-bash/pr-merge.json
+mkdir -p "${TARGET_CONFIG_DIR}"
+if [[ -f "${SCRIPT_DIR}/pr-merge.json" ]]; then
+  ln -sf "${SCRIPT_DIR}/pr-merge.json" "${TARGET_CONFIG_DIR}/pr-merge.json"
+  echo -e "  ${GREEN}✔${RESET} 建立設定檔軟連結: ${TARGET_CONFIG_DIR}/pr-merge.json -> ${SCRIPT_DIR}/pr-merge.json"
+fi
+
+# 4. 檢查並將引用設定寫入 ~/.zshrc
 ZSHRC="${HOME}/.zshrc"
 SOURCE_LINE="[[ -f \"${SCRIPT_DIR}/pr-review.zsh\" ]] && source \"${SCRIPT_DIR}/pr-review.zsh\""
 
