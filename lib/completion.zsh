@@ -15,9 +15,7 @@ if typeset -f compdef &>/dev/null || autoload -Uz compinit 2>/dev/null; then
       '-m[指定 PR 內容]:body'
       '-d[開立為 Draft PR]'
       '-y[跳過預覽直接執行]'
-      '-c[開啟設定檔]'
       '-h[顯示說明訊息]'
-      'config[開啟設定檔]'
       'help[顯示說明訊息]'
     )
 

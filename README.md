@@ -91,9 +91,6 @@ pr-merge -r owner/repo feature/login release/v1.0
 
 # 自動確認預覽直接執行
 pr-merge feature/login release/v1.0 -y
-
-# 編輯設定檔（設定要追蹤的 Repo 與預設 Base 分支）
-pr-merge config
 ```
 
 **互動介面操作 (單鍵零延遲響應)：**

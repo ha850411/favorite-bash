@@ -125,19 +125,6 @@ except Exception:
 "
 }
 
-# Edit configuration file
-function _pr_merge_open_config() {
-  _pr_merge_ensure_config
-  local config_path
-  config_path="$(_pr_merge_find_config_file)"
-  echo "${_PR_MERGE_CYAN}⚙️ 開啟設定檔：${_PR_MERGE_BOLD}${config_path}${_PR_MERGE_RESET}"
-  local editor="${EDITOR:-${VISUAL:-nano}}"
-  if command -v "$editor" &>/dev/null; then
-    "$editor" "$config_path"
-  else
-    echo "請使用您偏好的編輯器開啟：${config_path}"
-  fi
-}
 
 # Main entry point
 emulate -L zsh
@@ -159,7 +146,6 @@ arg_body=""
 is_draft=false
 auto_yes=false
 do_auto_merge=true
-show_config=false
 show_help=false
 
 positional=()
@@ -198,16 +184,8 @@ while [[ $# -gt 0 ]]; do
       auto_yes=true
       shift
       ;;
-    -c|--config)
-      show_config=true
-      shift
-      ;;
     -h|--help)
       show_help=true
-      shift
-      ;;
-    config)
-      show_config=true
       shift
       ;;
     help)
@@ -230,7 +208,6 @@ if [[ "$show_help" == true ]]; then
   echo ""
   echo "${_PR_MERGE_BOLD}使用方式：${_PR_MERGE_RESET}"
   echo "  pr-merge [來源分支 A] [目標分支 B] [選項]"
-  echo "  pr-merge config                        編輯設定檔 (${current_config_file})"
   echo ""
   echo "${_PR_MERGE_BOLD}選項：${_PR_MERGE_RESET}"
   echo "  -r, --repo <owner/repo>     只針對特定的 GitHub Repository 進行操作"
@@ -240,7 +217,6 @@ if [[ "$show_help" == true ]]; then
   echo "  -m, --body <body>           指定 PR 內容"
   echo "  -d, --draft                 開立為 Draft PR"
   echo "  -y, --yes                   跳過互動確認直接執行"
-  echo "  -c, --config                開啟設定檔 (${current_config_file})"
   echo "  -h, --help                  顯示此說明訊息"
   echo ""
   echo "${_PR_MERGE_BOLD}範例：${_PR_MERGE_RESET}"
@@ -248,11 +224,6 @@ if [[ "$show_help" == true ]]; then
   echo "  pr-merge feature/SERU-12705 release/SERVICE-0811 -M"
   echo "  pr-merge feature/SERU-12705 release/SERVICE-0811 -b develop"
   echo "  pr-merge -r 104corp/104crm-c feature/SERU-12705 release/SERVICE-0811"
-  exit 0
-fi
-
-if [[ "$show_config" == true ]]; then
-  _pr_merge_open_config
   exit 0
 fi
 
