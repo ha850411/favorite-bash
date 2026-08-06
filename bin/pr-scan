@@ -1,35 +1,35 @@
 #!/usr/bin/env zsh
 # ==============================================================================
-# Favorite Bash - gh PR Merge Tool (pr-merge)
+# Favorite Bash - gh PR Scan Tool (pr-scan)
 # 快速跨 Repositories 掃描分支、檢查檔案變更並批次發起/合併 PR
 # ==============================================================================
 
-_PR_MERGE_RED=$'\033[1;31m'
-_PR_MERGE_GREEN=$'\033[1;32m'
-_PR_MERGE_YELLOW=$'\033[1;33m'
-_PR_MERGE_CYAN=$'\033[1;36m'
-_PR_MERGE_BOLD=$'\033[1m'
-_PR_MERGE_DIM=$'\033[2m'
-_PR_MERGE_RESET=$'\033[0m'
+_PR_SCAN_RED=$'\033[1;31m'
+_PR_SCAN_GREEN=$'\033[1;32m'
+_PR_SCAN_YELLOW=$'\033[1;33m'
+_PR_SCAN_CYAN=$'\033[1;36m'
+_PR_SCAN_BOLD=$'\033[1m'
+_PR_SCAN_DIM=$'\033[2m'
+_PR_SCAN_RESET=$'\033[0m'
 
 # Dynamically locate the configuration file (prioritize project repo & favorite-bash repo)
-function _pr_merge_find_config_file() {
+function _pr_scan_find_config_file() {
   local project_root=""
   project_root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
 
   # 1. Search in current working directory or git project repository
-  if [[ -f "$PWD/.pr-merge.json" ]]; then
-    echo "$PWD/.pr-merge.json"
+  if [[ -f "$PWD/.pr-scan.json" ]]; then
+    echo "$PWD/.pr-scan.json"
     return 0
-  elif [[ -f "$PWD/pr-merge.json" ]]; then
-    echo "$PWD/pr-merge.json"
+  elif [[ -f "$PWD/pr-scan.json" ]]; then
+    echo "$PWD/pr-scan.json"
     return 0
   elif [[ -n "$project_root" && "$project_root" != "$HOME" ]]; then
-    if [[ -f "${project_root}/.pr-merge.json" ]]; then
-      echo "${project_root}/.pr-merge.json"
+    if [[ -f "${project_root}/.pr-scan.json" ]]; then
+      echo "${project_root}/.pr-scan.json"
       return 0
-    elif [[ -f "${project_root}/pr-merge.json" && "${project_root}" != "${HOME}/.local" ]]; then
-      echo "${project_root}/pr-merge.json"
+    elif [[ -f "${project_root}/pr-scan.json" && "${project_root}" != "${HOME}/.local" ]]; then
+      echo "${project_root}/pr-scan.json"
       return 0
     fi
   fi
@@ -37,28 +37,28 @@ function _pr_merge_find_config_file() {
   # 2. Search tool directory config (favorite-bash repo config)
   local script_dir="${0:A:h}"
   local tool_dir="${script_dir:h}"
-  if [[ -f "${tool_dir}/pr-merge.json" ]]; then
-    echo "${tool_dir}/pr-merge.json"
+  if [[ -f "${tool_dir}/pr-scan.json" ]]; then
+    echo "${tool_dir}/pr-scan.json"
     return 0
   fi
 
-  # 3. Search user home config ~/.config/favorite-bash/pr-merge.json
-  if [[ -f "${HOME}/.config/favorite-bash/pr-merge.json" ]]; then
-    echo "${HOME}/.config/favorite-bash/pr-merge.json"
+  # 3. Search user home config ~/.config/favorite-bash/pr-scan.json
+  if [[ -f "${HOME}/.config/favorite-bash/pr-scan.json" ]]; then
+    echo "${HOME}/.config/favorite-bash/pr-scan.json"
     return 0
-  elif [[ -f "${HOME}/.pr-merge.json" ]]; then
-    echo "${HOME}/.pr-merge.json"
+  elif [[ -f "${HOME}/.pr-scan.json" ]]; then
+    echo "${HOME}/.pr-scan.json"
     return 0
   fi
 
   # 4. Default creation path
-  echo "${tool_dir}/pr-merge.json"
+  echo "${tool_dir}/pr-scan.json"
 }
 
 # Ensure configuration file exists with default values
-function _pr_merge_ensure_config() {
+function _pr_scan_ensure_config() {
   local config_path
-  config_path="$(_pr_merge_find_config_file)"
+  config_path="$(_pr_scan_find_config_file)"
 
   local config_dir="${config_path:h}"
   if [[ ! -d "$config_dir" ]]; then
@@ -94,16 +94,16 @@ function _pr_merge_ensure_config() {
   }
 }
 EOF
-    echo "${_PR_MERGE_CYAN}💡 已建立設定檔：${_PR_MERGE_BOLD}${config_path}${_PR_MERGE_RESET}"
-    echo "${_PR_MERGE_DIM}您可以編輯此設定檔來新增各 Repository 不同的預設 Base 分支與 Pattern 規則。${_PR_MERGE_RESET}\n"
+    echo "${_PR_SCAN_CYAN}💡 已建立設定檔：${_PR_SCAN_BOLD}${config_path}${_PR_SCAN_RESET}"
+    echo "${_PR_SCAN_DIM}您可以編輯此設定檔來新增各 Repository 不同的預設 Base 分支與 Pattern 規則。${_PR_SCAN_RESET}\n"
   fi
 }
 
 # Read tracked repos array from config
-function _pr_merge_get_tracked_repos() {
-  _pr_merge_ensure_config
+function _pr_scan_get_tracked_repos() {
+  _pr_scan_ensure_config
   local config_path
-  config_path="$(_pr_merge_find_config_file)"
+  config_path="$(_pr_scan_find_config_file)"
   python3 -c "
 import json, sys
 try:
@@ -131,13 +131,13 @@ emulate -L zsh
 setopt multibyte extendedglob
 
 if ! command -v gh &>/dev/null; then
-  echo "${_PR_MERGE_RED}❌ 錯誤：未安裝 GitHub CLI ('gh')。${_PR_MERGE_RESET}"
+  echo "${_PR_SCAN_RED}❌ 錯誤：未安裝 GitHub CLI ('gh')。${_PR_SCAN_RESET}"
   echo "請使用 'brew install gh' 安裝並先執行 'gh auth login' 登入。"
   exit 1
 fi
 
-_pr_merge_ensure_config
-current_config_file="$(_pr_merge_find_config_file)"
+_pr_scan_ensure_config
+current_config_file="$(_pr_scan_find_config_file)"
 
 arg_repo=""
 arg_base_of_b=""
@@ -193,7 +193,7 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     -*)
-      echo "${_PR_MERGE_RED}❌ 未知的選項: $1${_PR_MERGE_RESET}"
+      echo "${_PR_SCAN_RED}❌ 未知的選項: $1${_PR_SCAN_RESET}"
       exit 1
       ;;
     *)
@@ -204,12 +204,12 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ "$show_help" == true ]]; then
-  echo "${_PR_MERGE_BOLD}${_PR_MERGE_CYAN}pr-merge - GitHub PR 快速自動合併工具${_PR_MERGE_RESET}"
+  echo "${_PR_SCAN_BOLD}${_PR_SCAN_CYAN}pr-scan - GitHub PR 快速自動合併工具${_PR_SCAN_RESET}"
   echo ""
-  echo "${_PR_MERGE_BOLD}使用方式：${_PR_MERGE_RESET}"
-  echo "  pr-merge [來源分支 A] [目標分支 B] [選項]"
+  echo "${_PR_SCAN_BOLD}使用方式：${_PR_SCAN_RESET}"
+  echo "  pr-scan [來源分支 A] [目標分支 B] [選項]"
   echo ""
-  echo "${_PR_MERGE_BOLD}選項：${_PR_MERGE_RESET}"
+  echo "${_PR_SCAN_BOLD}選項：${_PR_SCAN_RESET}"
   echo "  -r, --repo <owner/repo>     只針對特定的 GitHub Repository 進行操作"
   echo "  -b, --base <branch>         當目標分支 B 不存在時，強制指定建立 B 分支所 base 的來源分支"
   echo "  -M, --merge, --auto-merge   PR 建立或偵測已存在時，自動直接執行 PR Merge"
@@ -219,11 +219,11 @@ if [[ "$show_help" == true ]]; then
   echo "  -y, --yes                   跳過互動確認直接執行"
   echo "  -h, --help                  顯示此說明訊息"
   echo ""
-  echo "${_PR_MERGE_BOLD}範例：${_PR_MERGE_RESET}"
-  echo "  pr-merge feature/SERU-12705 release/SERVICE-0811"
-  echo "  pr-merge feature/SERU-12705 release/SERVICE-0811 -M"
-  echo "  pr-merge feature/SERU-12705 release/SERVICE-0811 -b develop"
-  echo "  pr-merge -r 104corp/104crm-c feature/SERU-12705 release/SERVICE-0811"
+  echo "${_PR_SCAN_BOLD}範例：${_PR_SCAN_RESET}"
+  echo "  pr-scan feature/SERU-12705 release/SERVICE-0811"
+  echo "  pr-scan feature/SERU-12705 release/SERVICE-0811 -M"
+  echo "  pr-scan feature/SERU-12705 release/SERVICE-0811 -b develop"
+  echo "  pr-scan -r 104corp/104crm-c feature/SERU-12705 release/SERVICE-0811"
   exit 0
 fi
 
@@ -233,24 +233,24 @@ branch_b="${positional[2]}"
 if [[ -z "$branch_a" ]]; then
   current_git_branch="$(git branch --show-current 2>/dev/null || true)"
   if [[ -n "$current_git_branch" ]]; then
-    printf "${_PR_MERGE_YELLOW}請輸入來源分支 (Branch A) [預設: %s]: ${_PR_MERGE_RESET}" "$current_git_branch"
+    printf "${_PR_SCAN_YELLOW}請輸入來源分支 (Branch A) [預設: %s]: ${_PR_SCAN_RESET}" "$current_git_branch"
     read -r input_a
     branch_a="${input_a:-$current_git_branch}"
   else
     while [[ -z "$branch_a" ]]; do
-      printf "${_PR_MERGE_YELLOW}請輸入來源分支 (Branch A): ${_PR_MERGE_RESET}"
+      printf "${_PR_SCAN_YELLOW}請輸入來源分支 (Branch A): ${_PR_SCAN_RESET}"
       read -r branch_a
     done
   fi
 fi
 
 while [[ -z "$branch_b" ]]; do
-  printf "${_PR_MERGE_YELLOW}請輸入目標分支 (Branch B): ${_PR_MERGE_RESET}"
+  printf "${_PR_SCAN_YELLOW}請輸入目標分支 (Branch B): ${_PR_SCAN_RESET}"
   read -r branch_b
 done
 
 if [[ "$branch_a" == "$branch_b" ]]; then
-  echo "${_PR_MERGE_RED}❌ 來源分支 A 和目標分支 B 不能相同 (${branch_a})！${_PR_MERGE_RESET}"
+  echo "${_PR_SCAN_RED}❌ 來源分支 A 和目標分支 B 不能相同 (${branch_a})！${_PR_SCAN_RESET}"
   exit 1
 fi
 

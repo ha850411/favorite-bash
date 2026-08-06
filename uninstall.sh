@@ -25,9 +25,9 @@ for cmd_path in "${SCRIPT_DIR}"/bin/*; do
 done
 
 # 2. 移除設定檔軟連結
-if [[ -L "${TARGET_CONFIG_DIR}/pr-merge.json" ]]; then
-  rm -f "${TARGET_CONFIG_DIR}/pr-merge.json"
-  echo -e "  ${GREEN}✔${RESET} 移除設定檔軟連結: ${TARGET_CONFIG_DIR}/pr-merge.json"
+if [[ -L "${TARGET_CONFIG_DIR}/pr-scan.json" ]]; then
+  rm -f "${TARGET_CONFIG_DIR}/pr-scan.json"
+  echo -e "  ${GREEN}✔${RESET} 移除設定檔軟連結: ${TARGET_CONFIG_DIR}/pr-scan.json"
 fi
 
 # 3. 清理 ~/.zshrc 中的引用設定
@@ -47,7 +47,7 @@ fi
 # 4. 若透過 source uninstall.sh 執行，直接清空當前視窗記憶體快取與函式定義
 if [ -n "$ZSH_VERSION" ]; then
   rehash 2>/dev/null || true
-  unfunction pr-merge pr-review pr-reviews 2>/dev/null || true
+  unfunction pr-scan pr-review pr-reviews 2>/dev/null || true
 elif [ -n "$BASH_VERSION" ]; then
   hash -r 2>/dev/null || true
 fi

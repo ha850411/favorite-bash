@@ -11,7 +11,7 @@
 ```
 此動作會：
 1. 將 `bin/` 下所有指令軟連結（symlink）至 `~/.local/bin/`。
-2. 將全域設定檔軟連結至 `~/.config/favorite-bash/pr-merge.json`。
+2. 將全域設定檔軟連結至 `~/.config/favorite-bash/pr-scan.json`。
 3. 將專案入口與 Zsh Tab 補全載入點寫入 `~/.zshrc`。
 4. **自動替換進程重載 Shell（`exec zsh`），當下視窗即時生效所有指令與 Tab 分支自動補全！無須輸入任何多餘指令。**
 
@@ -72,25 +72,25 @@ pr-reviews
 
 ---
 
-### 3. `pr-merge`
+### 3. `pr-scan`
 跨 Repositories 快速預覽分支變更、自動發起 PR 並支援一鍵/自動 Merge。若目標 Branch B 不存在，自動在遠端建立 Branch B。
 
 **使用方式：**
 ```bash
 # 基本用法：指定來源分支 A 與目標分支 B (預設開啟自動 Merge)
-pr-merge feature/SERU-12705 release/SERVICE-0811
+pr-scan feature/SERU-12705 release/SERVICE-0811
 
 # 關閉自動 Merge (僅建立/檢查 PR)
-pr-merge feature/SERU-12705 release/SERVICE-0811 --no-merge
+pr-scan feature/SERU-12705 release/SERVICE-0811 --no-merge
 
 # 指定 Target Branch B 不存在時所使用的 Base 分支
-pr-merge feature/SERU-12705 release/SERVICE-0811 -b develop
+pr-scan feature/SERU-12705 release/SERVICE-0811 -b develop
 
 # 指定特定 GitHub Repository
-pr-merge -r owner/repo feature/SERU-12705 release/SERVICE-0811
+pr-scan -r owner/repo feature/SERU-12705 release/SERVICE-0811
 
 # 自動確認預覽直接執行
-pr-merge feature/SERU-12705 release/SERVICE-0811 -y
+pr-scan feature/SERU-12705 release/SERVICE-0811 -y
 ```
 
 **互動介面操作 (單鍵零延遲響應)：**
@@ -102,18 +102,18 @@ pr-merge feature/SERU-12705 release/SERVICE-0811 -y
 
 ---
 
-### 📸 `pr-merge` 執行過程與效果預覽
+### 📸 `pr-scan` 執行過程與效果預覽
 
 #### 步驟 1：Tab 智慧單號與分支自動補全
-在 Terminal 輸入 `pr-merge` 時，支援單號、前綴雙向匹配與跨追蹤 Repos 檢索（每個 Repo 最多自動篩選 3 個最相符分支）：
+在 Terminal 輸入 `pr-scan` 時，支援單號、前綴雙向匹配與跨追蹤 Repos 檢索（每個 Repo 最多自動篩選 3 個最相符分支）：
 
 ```text
-$ pr-merge feature/SERU-127<Tab>
+$ pr-scan feature/SERU-127<Tab>
 feature/SERU-12700  -- 104crm-laravel (遠端來源分支)
 feature/SERU-12705  -- 104crm-laravel (遠端來源分支)
 feature/SERU-12716  -- 104crm-laravel-api (遠端來源分支)
 
-$ pr-merge feature/SERU-12705 release/SERVICE-08<Tab>
+$ pr-scan feature/SERU-12705 release/SERVICE-08<Tab>
 release/SERVICE-0811  -- 104crm-laravel-api (前綴完全符合)
 release/SERVICE-0804  -- 104crm-laravel-api (前綴完全符合)
 release/SERVICE-0806  -- 104crm-b (前綴完全符合)
@@ -123,7 +123,7 @@ release/SERVICE-0806  -- 104crm-b (前綴完全符合)
 執行指令後，自動非同步掃描所有 `tracked_repos` 的分支狀態、Diff 變更、與已存在 PR：
 
 ```text
-🔍 正在掃描 9 個 Repositories 中的分支與變更... (設定檔: ~/.config/favorite-bash/pr-merge.json)
+🔍 正在掃描 9 個 Repositories 中的分支與變更... (設定檔: ~/.config/favorite-bash/pr-scan.json)
 
 ================================================================================
  🔍 跨 Repository 掃描結果與 PR 管理 (來源: feature/SERU-12705 ➔ 目標: release/SERVICE-0811)
@@ -184,7 +184,7 @@ release/SERVICE-0806  -- 104crm-b (前綴完全符合)
 ---
 
 **設定檔說明：**
-設定檔預設讀取 `~/.config/favorite-bash/pr-merge.json`（或專案目錄下 `pr-merge.json`）：
+設定檔預設讀取 `~/.config/favorite-bash/pr-scan.json`（或專案目錄下 `pr-scan.json`）：
 ```json
 {
   "default_target_base": "main",

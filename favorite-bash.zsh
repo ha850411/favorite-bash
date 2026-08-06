@@ -13,8 +13,8 @@ fi
 if [[ -f "$SCRIPT_DIR/lib/pr-review-helpers.zsh" ]]; then
   source "$SCRIPT_DIR/lib/pr-review-helpers.zsh"
 fi
-if [[ -f "$SCRIPT_DIR/lib/pr-merge-helpers.zsh" ]]; then
-  source "$SCRIPT_DIR/lib/pr-merge-helpers.zsh"
+if [[ -f "$SCRIPT_DIR/lib/pr-scan-helpers.zsh" ]]; then
+  source "$SCRIPT_DIR/lib/pr-scan-helpers.zsh"
 fi
 if [[ -f "$SCRIPT_DIR/lib/completion.zsh" ]]; then
   source "$SCRIPT_DIR/lib/completion.zsh"

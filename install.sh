@@ -24,11 +24,11 @@ for cmd_path in "${SCRIPT_DIR}"/bin/*; do
   fi
 done
 
-# 3. 確保設定檔 pr-merge.json 軟連結至 ~/.config/favorite-bash/pr-merge.json
+# 3. 確保設定檔 pr-scan.json 軟連結至 ~/.config/favorite-bash/pr-scan.json
 mkdir -p "${TARGET_CONFIG_DIR}"
-if [[ -f "${SCRIPT_DIR}/pr-merge.json" ]]; then
-  ln -sf "${SCRIPT_DIR}/pr-merge.json" "${TARGET_CONFIG_DIR}/pr-merge.json"
-  echo -e "  ${GREEN}✔${RESET} 建立設定檔軟連結: ${TARGET_CONFIG_DIR}/pr-merge.json -> ${SCRIPT_DIR}/pr-merge.json"
+if [[ -f "${SCRIPT_DIR}/pr-scan.json" ]]; then
+  ln -sf "${SCRIPT_DIR}/pr-scan.json" "${TARGET_CONFIG_DIR}/pr-scan.json"
+  echo -e "  ${GREEN}✔${RESET} 建立設定檔軟連結: ${TARGET_CONFIG_DIR}/pr-scan.json -> ${SCRIPT_DIR}/pr-scan.json"
 fi
 
 # 4. 檢查並將專案入口引用寫入 ~/.zshrc (載入 Zsh Tab Autocomplete 自動補全)

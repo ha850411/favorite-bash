@@ -6,12 +6,12 @@
 _FAVORITE_BASH_ROOT="${${(%):-%x}:A:h:h}"
 
 if typeset -f compdef &>/dev/null || autoload -Uz compinit 2>/dev/null; then
-  _pr_merge_autocomplete() {
+  _pr_scan_autocomplete() {
     local tool_dir="${_FAVORITE_BASH_ROOT}"
 
-    # 1. 動態透過 symlink (例如 ~/.local/bin/pr-merge) 解析專案根目錄
-    if [[ ! -f "${tool_dir}/lib/pr-merge-autocomplete-helper.py" ]]; then
-      local binary_path="$(command -v pr-merge 2>/dev/null)"
+    # 1. 動態透過 symlink (例如 ~/.local/bin/pr-scan) 解析專案根目錄
+    if [[ ! -f "${tool_dir}/lib/pr-scan-autocomplete-helper.py" ]]; then
+      local binary_path="$(command -v pr-scan 2>/dev/null)"
       if [[ -n "$binary_path" ]]; then
         local real_bin=""
         if [[ -L "$binary_path" ]]; then
@@ -26,17 +26,17 @@ if typeset -f compdef &>/dev/null || autoload -Uz compinit 2>/dev/null; then
     fi
 
     # 2. 備用常見預設路徑
-    if [[ ! -f "${tool_dir}/lib/pr-merge-autocomplete-helper.py" ]]; then
+    if [[ ! -f "${tool_dir}/lib/pr-scan-autocomplete-helper.py" ]]; then
       tool_dir="/Volumes/workspace/favorite-bash"
     fi
 
-    local helper_script="${tool_dir}/lib/pr-merge-autocomplete-helper.py"
-    local config_file="${tool_dir}/pr-merge.json"
+    local helper_script="${tool_dir}/lib/pr-scan-autocomplete-helper.py"
+    local config_file="${tool_dir}/pr-scan.json"
 
-    if [[ ! -f "$config_file" && -f "$PWD/pr-merge.json" ]]; then
-      config_file="$PWD/pr-merge.json"
-    elif [[ ! -f "$config_file" && -f "${HOME}/.config/favorite-bash/pr-merge.json" ]]; then
-      config_file="${HOME}/.config/favorite-bash/pr-merge.json"
+    if [[ ! -f "$config_file" && -f "$PWD/pr-scan.json" ]]; then
+      config_file="$PWD/pr-scan.json"
+    elif [[ ! -f "$config_file" && -f "${HOME}/.config/favorite-bash/pr-scan.json" ]]; then
+      config_file="${HOME}/.config/favorite-bash/pr-scan.json"
     fi
 
     local -a flags
@@ -85,5 +85,5 @@ if typeset -f compdef &>/dev/null || autoload -Uz compinit 2>/dev/null; then
     fi
   }
 
-  compdef _pr_merge_autocomplete pr-merge 2>/dev/null || true
+  compdef _pr_scan_autocomplete pr-scan 2>/dev/null || true
 fi

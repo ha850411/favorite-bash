@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # ==============================================================================
-# Favorite Bash - Autocomplete Helper for pr-merge
+# Favorite Bash - Autocomplete Helper for pr-scan
 # 高效檢索追蹤的 Repos 分支與單號比對，支援 Branch A/B 雙向前綴匹配與動態過濾 (每 Repo 最多 3 個)
 # ==============================================================================
 
