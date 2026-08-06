@@ -31,19 +31,4 @@ if [[ -f "${SCRIPT_DIR}/pr-merge.json" ]]; then
   echo -e "  ${GREEN}✔${RESET} 建立設定檔軟連結: ${TARGET_CONFIG_DIR}/pr-merge.json -> ${SCRIPT_DIR}/pr-merge.json"
 fi
 
-# 4. 檢查並將引用設定寫入 ~/.zshrc
-ZSHRC="${HOME}/.zshrc"
-SOURCE_LINE="[[ -f \"${SCRIPT_DIR}/pr-review.zsh\" ]] && source \"${SCRIPT_DIR}/pr-review.zsh\""
-
-if [[ -f "${ZSHRC}" ]]; then
-  if ! grep -qF "${SCRIPT_DIR}/pr-review.zsh" "${ZSHRC}"; then
-    echo "" >> "${ZSHRC}"
-    echo "# favorite-bash" >> "${ZSHRC}"
-    echo "${SOURCE_LINE}" >> "${ZSHRC}"
-    echo -e "  ${GREEN}✔${RESET} 已將引用設定寫入 ${ZSHRC}"
-  else
-    echo -e "  ${YELLOW}ℹ${RESET} ${ZSHRC} 中已包含引用設定，跳過寫入"
-  fi
-fi
-
-echo -e "${GREEN}✨ 安裝完成！請執行 'source ~/.zshrc' 或重新開啟終端機。${RESET}"
+echo -e "${GREEN}✨ 安裝完成！所有指令已透過 ~/.local/bin 獨立運行。${RESET}"
