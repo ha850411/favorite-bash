@@ -214,3 +214,45 @@ release/SERVICE-0806  -- 104crm-b (前綴完全符合)
 - `repos`: 針對不同 GitHub Repositories 個別設定：
   - `default_base`: 該 Repo 預設的 Base 分支。
   - `branch_rules`: 針對該 Repo 內不同的 Target Branch 通配符 Match Pattern (例如 `release/hotfix/*` 或 `release/*`)，各自指定要使用的 Base 分支。
+
+---
+
+### 4. `feature-branch-scan`
+
+掃描 `pr-scan.json` 內所有 `tracked_repos` 的遠端 branches，找出符合
+`feature/SERU-<單號>`（可帶描述後綴）的分支，並透過 Jira API 判斷 Jira 狀態分類是否為
+`Done`。清單同時顯示 Jira Assignee，並提供互動式勾選；只有勾選後按 Enter 送出的 branches
+才會透過 GitHub API 刪除。清單預設全部不勾選，按 `q` 可安全離開。
+
+先在專案根目錄建立不會被 Git 追蹤的 `jira.env`：
+
+```bash
+JIRA_URL=https://your-company.atlassian.net
+JIRA_USERNAME=your-email@example.com
+JIRA_API_TOKEN=your-api-token
+```
+
+**使用方式：**
+
+```bash
+# 掃描設定檔內全部 repositories
+feature-branch-scan
+
+# 只掃描單一 repository
+feature-branch-scan --repo 104corp/104crm-laravel
+
+# 輸出可供其他工具使用的完整 JSON 結果（唯讀，不進入刪除選單）
+feature-branch-scan --json
+```
+
+**互動選單快捷鍵：**
+
+- `↑` / `k`：上移
+- `↓` / `j`：下移
+- `Space`：勾選／取消勾選
+- `a`：全選／全部取消
+- `Enter`：送出並刪除已勾選 branches
+- `q`：取消並離開，不刪除任何 branch
+
+判定依據為 Jira `fields.status.statusCategory.key == "done"`，不依賴工作流程中可能客製化的狀態名稱。
+若任一 GitHub repository 或 Jira issue 查詢失敗，仍會輸出已取得的部分結果，並以 exit code `2` 結束，避免把未知狀態誤列為可刪除。
