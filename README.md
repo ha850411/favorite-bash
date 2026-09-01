@@ -129,22 +129,25 @@ release/SERVICE-0806  -- 104crm-b (前綴完全符合)
  🔍 跨 Repository 掃描結果與 PR 管理 (來源: feature/SERU-12705 ➔ 目標: release/SERVICE-0811)
  ⚡ 自動 Merge 模式: 🟢 已開啟 (單鍵 m 切換，發起/偵測 PR 後會直接自動 Merge)
 ================================================================================
- [✓] 1) 104corp/104crm-laravel (有檔案變更: 3 commits, 5 files (+120/-45))
+ ❯ [✓] 1) 104corp/104crm-laravel (有檔案變更: 3 commits, 5 files (+120/-45))
         • 目標分支 B: 遠端已存在 release/SERVICE-0811 ➔ 將【自動 Merge】
- [✓] 2) 104corp/104crm-laravel-api (PR 已存在 #142)
+   [✓] 2) 104corp/104crm-laravel-api (PR 已存在 #142)
         • 狀態: PR 已存在 (#142): https://github.com/104corp/104crm-laravel-api/pull/142 ➔ 將【自動 Merge】
- [ ] 3) 104corp/104crm-b (無檔案變更: 0 commits, +0/-0) ➔ 自動跳過
- [✓] 4) 104corp/104crm-c (有檔案變更: 1 commits, 2 files (+15/-2))
+   [ ] 3) 104corp/104crm-b (無檔案變更: 0 commits, +0/-0) ➔ 自動跳過
+   [✓] 4) 104corp/104crm-c (有檔案變更: 1 commits, 2 files (+15/-2))
         • 目標分支 B: 遠端尚未建立 release/SERVICE-0811 ➔ 將自動建立並 Base 於: develop (Repo 預設 (*)) ➔ 將【自動 Merge】
 ================================================================================
 請按按鍵進行操作 (單鍵即時響應，零延遲原地刷新)：
-  • 按 y 或 Enter : 確認執行勾選的 3 個 Repos (發起/檢查 PR 並直接 Merge)
-  • 按 m        : 切換【自動 Merge 模式】 (零延遲原地切換)
-  • 按 b        : 選擇並修改某個 Repo 建立 Branch B 時的 Base 分支
-  • 按 1-9      : 即時勾選 / 取消勾選指定 Repo
-  • 按 q        : 取消操作並退出
+  • ↑ / ↓ (或 j/k)       : 上下移動游標選擇 Repo
+  • ← / → (或 Space)     : 左右切換勾選 (← 取消勾選 / → 勾選 / Space 切換)
+  • 按 a                 : 全選 / 全部取消勾選
+  • 按 m                 : 切換【自動 Merge 模式】 (零延遲原地切換)
+  • 按 b                 : 選擇並修改目前游標 (或指定) Repo 的 Base 分支
+  • 按 1-9               : 即時勾選 / 取消勾選指定 Repo
+  • 按 y 或 Enter          : 確認執行勾選的 3 個 Repos (發起/檢查 PR 並直接 Merge)
+  • 按 q                 : 取消操作並退出
 
-👉 請按下按鍵 [y/m/b/1-9/q]: y
+👉 請按下按鍵 [↑↓←→/Space/y/m/b/1-9/q]: y
 ```
 
 #### 步驟 3：自動建立目標分支、發起 PR 與批次 Merge

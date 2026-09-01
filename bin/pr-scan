@@ -255,7 +255,7 @@ if [[ "$branch_a" == "$branch_b" ]]; then
 fi
 
 python3 -c '
-import sys, os, subprocess, json, fnmatch, termios, tty
+import sys, os, subprocess, json, fnmatch, termios, tty, select
 
 C_CYAN = "\033[1;36m"
 C_GREEN = "\033[1;32m"
@@ -365,17 +365,61 @@ def check_existing_pr(repo, head_branch, base_branch):
             pass
     return None
 
-def get_single_key():
+def get_key():
     fd = sys.stdin.fileno()
     if not os.isatty(fd):
         return sys.stdin.read(1)
     old_settings = termios.tcgetattr(fd)
     try:
         tty.setcbreak(fd)
-        ch = sys.stdin.read(1)
+        data = os.read(fd, 32)
+        if not data:
+            return ""
+        if data == b"\x1b":
+            r, _, _ = select.select([fd], [], [], 0.05)
+            if r:
+                extra = os.read(fd, 32)
+                data += extra
+
+        if data in (b"\x1b[A", b"\x1bOA"):
+            return "UP"
+        elif data in (b"\x1b[B", b"\x1bOB"):
+            return "DOWN"
+        elif data in (b"\x1b[C", b"\x1bOC"):
+            return "RIGHT"
+        elif data in (b"\x1b[D", b"\x1bOD"):
+            return "LEFT"
+        elif data.startswith(b"\x1b[") or data.startswith(b"\x1bO"):
+            if data.endswith(b"A"):
+                return "UP"
+            elif data.endswith(b"B"):
+                return "DOWN"
+            elif data.endswith(b"C"):
+                return "RIGHT"
+            elif data.endswith(b"D"):
+                return "LEFT"
+            elif b"5~" in data:
+                return "PAGE_UP"
+            elif b"6~" in data:
+                return "PAGE_DOWN"
+            return "IGNORE"
+        elif data == b"\x1b":
+            return "ESC"
+        elif data in (b"\r", b"\n"):
+            return "ENTER"
+        elif data == b" ":
+            return "SPACE"
+        elif data == b"\x03":
+            return "CTRL_C"
+        elif data == b"\x04":
+            return "CTRL_D"
+        else:
+            try:
+                return data.decode("utf-8")
+            except Exception:
+                return ""
     finally:
         termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-    return ch
 
 def clear_screen():
     if sys.stdout.isatty():
@@ -426,97 +470,129 @@ if matched_count == 0:
     print(f"{C_DIM}請確認 Branch A 名稱是否正確並已 Push 到遠端。{C_RESET}")
     sys.exit(0)
 
+# Default cursor to first repo that has changes or existing PR, otherwise 0
+cursor = 0
+for idx_i, item in enumerate(items):
+    if item["has_a"] and (item["has_changes"] or item["existing_pr"]):
+        cursor = idx_i
+        break
+
 # Interactive Review Loop (In-Place Screen Refresh)
-while True:
-    clear_screen()
-    merge_status_label = f"{C_GREEN}🟢 已開啟 (單鍵 m 切換，發起/偵測 PR 後會直接自動 Merge){C_RESET}" if do_auto_merge else f"{C_DIM}⚪ 已關閉 (單鍵 m 切換，僅發起/檢查 PR){C_RESET}"
-    print("=" * 80)
-    print(f" {C_BOLD}{C_CYAN}🔍 跨 Repository 掃描結果與 PR 管理 (來源: {branch_a} ➔ 目標: {branch_b}){C_RESET}")
-    print(f" {C_BOLD}⚡ 自動 Merge 模式:{C_RESET} {merge_status_label}")
-    print("=" * 80)
+print("\033[?25l", end="", flush=True)
+try:
+    while True:
+        clear_screen()
+        merge_status_label = f"{C_GREEN}🟢 已開啟 (單鍵 m 切換，發起/偵測 PR 後會直接自動 Merge){C_RESET}" if do_auto_merge else f"{C_DIM}⚪ 已關閉 (單鍵 m 切換，僅發起/檢查 PR){C_RESET}"
+        print("=" * 80)
+        print(f" {C_BOLD}{C_CYAN}🔍 跨 Repository 掃描結果與 PR 管理 (來源: {branch_a} ➔ 目標: {branch_b}){C_RESET}")
+        print(f" {C_BOLD}⚡ 自動 Merge 模式:{C_RESET} {merge_status_label}")
+        print("=" * 80)
 
-    for item in items:
-        status_check = f"{C_GREEN}[✓]{C_RESET}" if item["selected"] else f"{C_DIM}[ ]{C_RESET}"
-        r_name = item["repo"]
-        repo_name = f"{C_BOLD}{r_name}{C_RESET}"
-        idx_num = item["index"]
-        diff = item["diff"]
-        ex_pr = item["existing_pr"]
-        
-        action_suffix = f" {C_GREEN}➔ 將【自動 Merge】{C_RESET}" if (do_auto_merge and item["selected"]) else ""
+        for idx_i, item in enumerate(items):
+            is_cursor = (idx_i == cursor)
+            pointer = f"{C_CYAN}{C_BOLD}❯{C_RESET}" if is_cursor else " "
+            status_check = f"{C_GREEN}[✓]{C_RESET}" if item["selected"] else f"{C_DIM}[ ]{C_RESET}"
+            r_name = item["repo"]
+            repo_name = f"{C_BOLD}{C_CYAN}{r_name}{C_RESET}" if is_cursor else f"{C_BOLD}{r_name}{C_RESET}"
+            idx_num = item["index"]
+            diff = item["diff"]
+            ex_pr = item["existing_pr"]
+            
+            action_suffix = f" {C_GREEN}➔ 將【自動 Merge】{C_RESET}" if (do_auto_merge and item["selected"]) else ""
 
-        if not item["has_a"]:
-            print(f" {status_check} {idx_num}) {repo_name} {C_RED}(遠端未找到分支 {branch_a}){C_RESET}")
-        else:
-            if ex_pr:
-                pr_num = ex_pr.get("number", "")
-                pr_url = ex_pr.get("url", "")
-                b_desc = f"{C_CYAN}PR 已存在 (#{pr_num}): {pr_url}{C_RESET}{action_suffix}"
-                print(f" {status_check} {idx_num}) {repo_name} {C_GREEN}(PR 已存在 #{pr_num}){C_RESET}")
-                print(f"        • 狀態: {b_desc}")
-            elif not item["has_changes"]:
-                print(f" {status_check} {idx_num}) {repo_name} {C_YELLOW}(無檔案變更: 0 commits, +0/-0){C_RESET} {C_DIM}➔ 自動跳過{C_RESET}")
+            if not item["has_a"]:
+                print(f" {pointer} {status_check} {idx_num}) {repo_name} {C_RED}(遠端未找到分支 {branch_a}){C_RESET}")
             else:
-                c_cnt = diff["commits_count"]
-                f_cnt = diff["files_count"]
-                adds = diff["additions"]
-                dels = diff["deletions"]
-                diff_summary = f"{c_cnt} commits, {f_cnt} files (+{adds}/-{dels})"
-                if item["has_b"]:
-                    b_desc = f"{C_GREEN}遠端已存在 {branch_b}{C_RESET}{action_suffix}"
+                if ex_pr:
+                    pr_num = ex_pr.get("number", "")
+                    pr_url = ex_pr.get("url", "")
+                    b_desc = f"{C_CYAN}PR 已存在 (#{pr_num}): {pr_url}{C_RESET}{action_suffix}"
+                    print(f" {pointer} {status_check} {idx_num}) {repo_name} {C_GREEN}(PR 已存在 #{pr_num}){C_RESET}")
+                    print(f"        • 狀態: {b_desc}")
+                elif not item["has_changes"]:
+                    print(f" {pointer} {status_check} {idx_num}) {repo_name} {C_YELLOW}(無檔案變更: 0 commits, +0/-0){C_RESET} {C_DIM}➔ 自動跳過{C_RESET}")
                 else:
-                    sel_b = item["selected_base"]
-                    s_lbl = item["source_label"]
-                    base_desc = f"{C_YELLOW}將自動建立並 Base 於: {sel_b}{C_RESET} {C_DIM}({s_lbl}){C_RESET}"
-                    b_desc = f"{C_YELLOW}遠端尚未建立 {branch_b}{C_RESET} ➔ {base_desc}{action_suffix}"
-                
-                print(f" {status_check} {idx_num}) {repo_name} {C_GREEN}(有檔案變更: {diff_summary}){C_RESET}")
-                print(f"        • 目標分支 B: {b_desc}")
+                    c_cnt = diff["commits_count"]
+                    f_cnt = diff["files_count"]
+                    adds = diff["additions"]
+                    dels = diff["deletions"]
+                    diff_summary = f"{c_cnt} commits, {f_cnt} files (+{adds}/-{dels})"
+                    if item["has_b"]:
+                        b_desc = f"{C_GREEN}遠端已存在 {branch_b}{C_RESET}{action_suffix}"
+                    else:
+                        sel_b = item["selected_base"]
+                        s_lbl = item["source_label"]
+                        base_desc = f"{C_YELLOW}將自動建立並 Base 於: {sel_b}{C_RESET} {C_DIM}({s_lbl}){C_RESET}"
+                        b_desc = f"{C_YELLOW}遠端尚未建立 {branch_b}{C_RESET} ➔ {base_desc}{action_suffix}"
+                    
+                    print(f" {pointer} {status_check} {idx_num}) {repo_name} {C_GREEN}(有檔案變更: {diff_summary}){C_RESET}")
+                    print(f"        • 目標分支 B: {b_desc}")
 
-    print("=" * 80)
+        print("=" * 80)
 
-    selected_items = [it for it in items if it["selected"]]
-    
-    if auto_yes:
-        break
+        selected_items = [it for it in items if it["selected"]]
+        
+        if auto_yes:
+            break
 
-    exec_action_text = f"{C_GREEN}發起/檢查 PR 並直接 Merge{C_RESET}" if do_auto_merge else f"發起/檢查 PR"
+        exec_action_text = f"{C_GREEN}發起/檢查 PR 並直接 Merge{C_RESET}" if do_auto_merge else f"發起/檢查 PR"
 
-    print(f"{C_BOLD}請按按鍵進行操作 (單鍵即時響應，零延遲原地刷新)：{C_RESET}")
-    print(f"  • 按 {C_GREEN}y{C_RESET} 或 {C_GREEN}Enter{C_RESET} : 確認執行勾選的 {len(selected_items)} 個 Repos ({exec_action_text})")
-    print(f"  • 按 {C_YELLOW}m{C_RESET}        : 切換【自動 Merge 模式】 (零延遲原地切換)")
-    print(f"  • 按 {C_YELLOW}b{C_RESET}        : 選擇並修改某個 Repo 建立 Branch B 時的 Base 分支")
-    print(f"  • 按 {C_CYAN}1-{len(items)}{C_RESET}      : 即時勾選 / 取消勾選指定 Repo")
-    print(f"  • 按 {C_RED}q{C_RESET}        : 取消操作並退出")
-    print("")
-    print(f"{C_YELLOW}👉 請按下按鍵 [y/m/b/1-{len(items)}/q]: {C_RESET}", end="", flush=True)
+        print(f"{C_BOLD}請按按鍵進行操作 (單鍵即時響應，零延遲原地刷新)：{C_RESET}")
+        print(f"  • {C_CYAN}↑ / ↓{C_RESET} (或 {C_CYAN}j/k{C_RESET})       : 上下移動游標選擇 Repo")
+        print(f"  • {C_CYAN}← / →{C_RESET} (或 {C_CYAN}Space{C_RESET})     : 左右切換勾選 (← 取消勾選 / → 勾選 / Space 切換)")
+        print(f"  • 按 {C_CYAN}a{C_RESET}                 : 全選 / 全部取消勾選")
+        print(f"  • 按 {C_YELLOW}m{C_RESET}                 : 切換【自動 Merge 模式】 (零延遲原地切換)")
+        print(f"  • 按 {C_YELLOW}b{C_RESET}                 : 選擇並修改目前游標 (或指定) Repo 的 Base 分支")
+        print(f"  • 按 {C_CYAN}1-{len(items)}{C_RESET}               : 即時勾選 / 取消勾選指定 Repo")
+        print(f"  • 按 {C_GREEN}y{C_RESET} 或 {C_GREEN}Enter{C_RESET}          : 確認執行勾選的 {len(selected_items)} 個 Repos ({exec_action_text})")
+        print(f"  • 按 {C_RED}q{C_RESET}                 : 取消操作並退出")
+        print("")
+        print(f"{C_YELLOW}👉 請按下按鍵 [↑↓←→/Space/y/m/b/1-{len(items)}/q]: {C_RESET}", end="", flush=True)
 
-    try:
-        ch = get_single_key()
-    except (EOFError, KeyboardInterrupt):
-        print(f"\n{C_DIM}已取消操作。{C_RESET}")
-        sys.exit(0)
-
-    if ch in ["y", "Y", "\n", "\r"]:
-        print(ch)
-        break
-    elif ch in ["q", "Q", "\x03"]:
-        print(ch)
-        print(f"\n{C_DIM}已取消操作。{C_RESET}")
-        sys.exit(0)
-
-    # Instant Single-Key Toggle Auto-Merge mode with screen clear
-    elif ch in ["m", "M"]:
-        do_auto_merge = not do_auto_merge
-        continue
-
-    # Interactive Base Branch Modification Sub-menu
-    elif ch in ["b", "B"]:
-        print(ch)
         try:
-            sub_input = input(f"{C_YELLOW}請輸入要修改 Base 分支的 Repo 編號 [1-{len(items)}]: {C_RESET}").strip()
-            if sub_input.isdigit():
-                target_idx = int(sub_input)
+            key = get_key()
+        except (EOFError, KeyboardInterrupt):
+            print(f"\n{C_DIM}已取消操作。{C_RESET}")
+            sys.exit(0)
+
+        if key in ["UP", "k", "K"]:
+            cursor = (cursor - 1) % len(items)
+            continue
+        elif key in ["DOWN", "j", "J"]:
+            cursor = (cursor + 1) % len(items)
+            continue
+        elif key in ["LEFT", "h", "H"]:
+            items[cursor]["selected"] = False
+            continue
+        elif key in ["RIGHT", "l", "L"]:
+            items[cursor]["selected"] = True
+            continue
+        elif key == "SPACE":
+            items[cursor]["selected"] = not items[cursor]["selected"]
+            continue
+        elif key in ["a", "A"]:
+            valid_items = [it for it in items if it["has_a"]]
+            new_val = not all(it["selected"] for it in valid_items) if valid_items else False
+            for it in items:
+                if it["has_a"]:
+                    it["selected"] = new_val
+            continue
+        elif key in ["y", "Y", "ENTER"]:
+            break
+        elif key in ["IGNORE", ""]:
+            continue
+        elif key in ["q", "Q", "ESC", "CTRL_C", "CTRL_D"]:
+            print(f"\n{C_DIM}已取消操作。{C_RESET}")
+            sys.exit(0)
+        elif key in ["m", "M"]:
+            do_auto_merge = not do_auto_merge
+            continue
+        elif key in ["b", "B"]:
+            print("\033[?25h", end="", flush=True)
+            try:
+                default_target = cursor + 1
+                sub_input = input(f"{C_YELLOW}請輸入要修改 Base 分支的 Repo 編號 [1-{len(items)}] (預設: {default_target}): {C_RESET}").strip()
+                target_idx = int(sub_input) if sub_input.isdigit() else default_target
                 match_item = next((it for it in items if it["index"] == target_idx), None)
                 if match_item:
                     if match_item["has_b"]:
@@ -564,21 +640,26 @@ while True:
                 else:
                     print(f"{C_RED}❌ 找不到編號為 {target_idx} 的 Repo。{C_RESET}")
                     input("按 Enter 繼續...")
-        except (EOFError, KeyboardInterrupt):
-            continue
+            except (EOFError, KeyboardInterrupt):
+                continue
+            finally:
+                print("\033[?25l", end="", flush=True)
 
-    elif ch.isdigit():
-        target_idx = int(ch)
-        match_item = next((it for it in items if it["index"] == target_idx), None)
-        if match_item:
-            if not match_item["has_a"]:
-                r_name = match_item["repo"]
-                print(f"\n{C_YELLOW}⚠️ 注意：Repo {r_name} 遠端未找到 Branch A ({branch_a})。{C_RESET}")
-            elif not match_item["has_changes"] and not match_item["existing_pr"]:
-                r_name = match_item["repo"]
-                print(f"\n{C_YELLOW}⚠️ 注意：Repo {r_name} 沒有檔案變更 (0 commits)。{C_RESET}")
-            
-            match_item["selected"] = not match_item["selected"]
+        elif key.isdigit():
+            target_idx = int(key)
+            if 1 <= target_idx <= len(items):
+                cursor = target_idx - 1
+                match_item = items[cursor]
+                if not match_item["has_a"]:
+                    r_name = match_item["repo"]
+                    print(f"\n{C_YELLOW}⚠️ 注意：Repo {r_name} 遠端未找到 Branch A ({branch_a})。{C_RESET}")
+                elif not match_item["has_changes"] and not match_item["existing_pr"]:
+                    r_name = match_item["repo"]
+                    print(f"\n{C_YELLOW}⚠️ 注意：Repo {r_name} 沒有檔案變更 (0 commits)。{C_RESET}")
+                
+                match_item["selected"] = not match_item["selected"]
+finally:
+    print("\033[?25h", end="", flush=True)
 
 if not selected_items:
     print(f"{C_YELLOW}沒有勾選任何要執行的 Repository，已結束。{C_RESET}")
