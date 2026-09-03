@@ -358,6 +358,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--config", help="設定檔路徑（預設 bulletin-quiz.json）")
     parser.add_argument("--slug", help="只處理指定文章尾碼，例如 20260831_BeAGiver")
     parser.add_argument(
+        "-d",
         "--dry-run",
         action="store_true",
         help="查詢題目與答案，但不送出登記",

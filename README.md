@@ -284,8 +284,8 @@ feature-branch-scan --json
 # 完成所有未完成公告（直接帶入員工編號）
 bulletin-quiz 3395
 
-# 預覽所有未完成公告的題目與答案，不送出
-bulletin-quiz 3395 --dry-run
+# 預覽所有未完成公告的題目與答案，不送出（可使用 -d 或 --dry-run）
+bulletin-quiz 3395 -d
 
 # 只處理指定文章尾碼
 bulletin-quiz 3395 --slug 20260831_BeAGiver

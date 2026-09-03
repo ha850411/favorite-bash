@@ -160,6 +160,31 @@ class BulletinQuizTests(unittest.TestCase):
         self.assertIn("作答：高雄市", stdout.getvalue())
         self.assertIn("未送出任何登記", stdout.getvalue())
 
+    def test_dry_run_short_flag_does_not_post(self):
+        client = FakeClient()
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.object(quiz, "HttpClient", return_value=client),
+            patch("sys.stdout", new_callable=io.StringIO) as stdout,
+        ):
+            config_path = Path(directory) / "bulletin-quiz.json"
+            config_path.write_text(
+                json.dumps({
+                    "search_url": "https://bulletin-104.s3-ap-northeast-1.amazonaws.com/search.html"
+                }),
+                encoding="utf-8",
+            )
+            result = quiz.main(
+                ["3395", "--config", str(config_path), "-d"],
+                project_root=Path(directory),
+                environ={},
+            )
+
+        self.assertEqual(result, 0)
+        self.assertEqual(client.posts, [])
+        self.assertIn("作答：高雄市", stdout.getvalue())
+        self.assertIn("未送出任何登記", stdout.getvalue())
+
     def test_live_flow_posts_then_verifies_record(self):
         client = FakeClient()
         with (

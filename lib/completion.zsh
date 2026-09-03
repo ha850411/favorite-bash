@@ -88,6 +88,7 @@ if typeset -f compdef &>/dev/null || autoload -Uz compinit 2>/dev/null; then
   _bulletin_quiz_autocomplete() {
     local -a flags
     flags=(
+      '-d[查詢題目與答案，但不送出登記]'
       '--dry-run[查詢題目與答案，但不送出登記]'
       '--slug[只處理指定文章尾碼，例如 20260831_BeAGiver]:slug'
       '--config[設定檔路徑]:config file:_files'
