@@ -1,5 +1,7 @@
 {
-  "employee_id": "3395",
+  "api_url": "https://ud05zawv78.execute-api.ap-northeast-1.amazonaws.com/prod",
   "search_url": "https://bulletin-104.s3-ap-northeast-1.amazonaws.com/search.html",
   "short_link_base": "https://o.104.tw"
 }
+
+

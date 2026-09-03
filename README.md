@@ -267,11 +267,11 @@ feature-branch-scan --json
 
 查詢 104 佈告欄近兩個月的點閱紀錄，自動處理尚未完成的公告題目，送出後會再次查詢並確認點閱紀錄已完成。
 
-員工編號放在 `bulletin-quiz.json`，每位使用者可自行修改：
+執行指令時請直接帶入員工編號，不預存任何員工編號。若有自訂查詢頁或短網址的需求，可透過 `bulletin-quiz.json` 設定：
 
 ```json
 {
-  "employee_id": "3395",
+  "api_url": "https://ud05zawv78.execute-api.ap-northeast-1.amazonaws.com/prod",
   "search_url": "https://bulletin-104.s3-ap-northeast-1.amazonaws.com/search.html",
   "short_link_base": "https://o.104.tw"
 }
@@ -282,15 +282,16 @@ feature-branch-scan --json
 **使用方式：**
 
 ```bash
-# 預覽所有未完成公告的題目與答案，不送出
-bulletin-quiz --dry-run
+# 完成所有未完成公告（直接帶入員工編號）
+bulletin-quiz 3395
 
-# 完成所有未完成公告
-bulletin-quiz
+# 預覽所有未完成公告的題目與答案，不送出
+bulletin-quiz 3395 --dry-run
 
 # 只處理指定文章尾碼
-bulletin-quiz --slug 20260831_BeAGiver
+bulletin-quiz 3395 --slug 20260831_BeAGiver
 
 # 使用另一份個人設定檔
-bulletin-quiz --config /path/to/bulletin-quiz.json
+bulletin-quiz 3395 --config /path/to/bulletin-quiz.json
 ```
+

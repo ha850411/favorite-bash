@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import date, datetime
 import json
@@ -15,6 +16,7 @@ from typing import Any, Mapping, Optional, Sequence
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, quote, urlencode, urlsplit
 from urllib.request import Request, urlopen
+
 
 
 DEFAULT_SEARCH_URL = (
@@ -50,27 +52,36 @@ class Event:
         return filename[:-5] if filename.lower().endswith(".aspx") else filename
 
 
-def load_config(path: Path) -> Config:
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except FileNotFoundError as exc:
-        raise BulletinError(f"找不到設定檔：{path}") from exc
-    except (OSError, json.JSONDecodeError) as exc:
-        raise BulletinError(f"無法讀取設定檔 {path}：{exc}") from exc
+def validate_employee_id(employee_id: Any) -> str:
+    clean_id = str(employee_id or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9]+", clean_id):
+        raise BulletinError("員工編號必須是非空白英數字")
+    return clean_id
 
-    if not isinstance(payload, dict):
-        raise BulletinError(f"設定檔 {path} 必須是 JSON object")
 
-    employee_id = str(payload.get("employee_id", "")).strip()
-    if not re.fullmatch(r"[A-Za-z0-9]+", employee_id):
-        raise BulletinError("employee_id 必須是非空白英數字")
+def load_config(path: Optional[Path] = None, employee_id: str = "") -> Config:
+    valid_id = validate_employee_id(employee_id)
+    search_url = DEFAULT_SEARCH_URL
+    short_link_base = DEFAULT_SHORT_LINK_BASE
+    api_url = None
 
-    search_url = str(payload.get("search_url") or DEFAULT_SEARCH_URL).strip()
-    short_link_base = str(
-        payload.get("short_link_base") or DEFAULT_SHORT_LINK_BASE
-    ).strip()
-    raw_api_url = payload.get("api_url")
-    api_url = str(raw_api_url).strip().rstrip("/") if raw_api_url else None
+    if path is not None and path.is_file():
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise BulletinError(f"無法讀取設定檔 {path}：{exc}") from exc
+
+        if not isinstance(payload, dict):
+            raise BulletinError(f"設定檔 {path} 必須是 JSON object")
+
+        if "search_url" in payload and payload["search_url"]:
+            search_url = str(payload["search_url"]).strip()
+        if "short_link_base" in payload and payload["short_link_base"]:
+            short_link_base = str(payload["short_link_base"]).strip()
+        raw_api_url = payload.get("api_url")
+        api_url = str(raw_api_url).strip().rstrip("/") if raw_api_url else None
+    elif path is not None and not path.is_file():
+        raise BulletinError(f"找不到設定檔：{path}")
 
     for name, value in (
         ("search_url", search_url),
@@ -81,21 +92,26 @@ def load_config(path: Path) -> Config:
     if api_url and (urlsplit(api_url).scheme != "https" or not urlsplit(api_url).netloc):
         raise BulletinError("api_url 必須是有效的 https URL")
 
-    return Config(employee_id, search_url, short_link_base.rstrip("/"), api_url)
+    return Config(valid_id, search_url, short_link_base.rstrip("/"), api_url)
 
 
 def find_config_path(
     project_root: Path,
     explicit: Optional[str],
     environ: Mapping[str, str],
-) -> Path:
+) -> Optional[Path]:
     if explicit:
         return Path(explicit).expanduser().resolve()
     if environ.get("FAVORITE_BASH_BULLETIN_CONFIG"):
         return Path(environ["FAVORITE_BASH_BULLETIN_CONFIG"]).expanduser().resolve()
 
     user_config = Path.home() / ".config" / "favorite-bash" / "bulletin-quiz.json"
-    return user_config if user_config.is_file() else project_root / "bulletin-quiz.json"
+    if user_config.is_file():
+        return user_config
+    project_config = project_root / "bulletin-quiz.json"
+    if project_config.is_file():
+        return project_config
+    return None
 
 
 class HttpClient:
@@ -234,6 +250,15 @@ class BulletinService:
         return values[0] if values and values[0] else event.key
 
     def load_form(self, event: Event) -> tuple[str, dict[str, Any]]:
+        # event.key matches the form 'ad' GUID; try it first to avoid 1-1.5s redirect latency.
+        if event.key:
+            try:
+                query = urlencode({"ad": event.key, "id": self.config.employee_id})
+                payload, _ = self.client.json(f"{self.api_url}/bulletin/add?{query}")
+                return event.key, payload
+            except BulletinError:
+                pass
+
         ad = self.resolve_ad(event)
         query = urlencode({"ad": ad, "id": self.config.employee_id})
         payload, _ = self.client.json(f"{self.api_url}/bulletin/add?{query}")
@@ -246,6 +271,25 @@ class BulletinService:
             json_body={"EVENT_ID": ad, "ID": self.config.employee_id},
         )
 
+    def wait_until_all_completed(
+        self,
+        event_ids: set[str],
+        *,
+        attempts: int = 4,
+        delay: float = 0.5,
+    ) -> set[str]:
+        """Allow for a short backend propagation delay after registration, returning confirmed IDs."""
+        if not event_ids:
+            return set()
+        for attempt in range(attempts):
+            _, completed = self.query_records()
+            confirmed = event_ids & completed
+            if confirmed == event_ids:
+                return confirmed
+            if attempt + 1 < attempts:
+                time.sleep(delay * (attempt + 1))
+        return event_ids & completed
+
     def wait_until_completed(
         self,
         event_ids: set[str],
@@ -254,13 +298,10 @@ class BulletinService:
         delay: float = 0.5,
     ) -> bool:
         """Allow for a short backend propagation delay after registration."""
-        for attempt in range(attempts):
-            _, completed = self.query_records()
-            if event_ids & completed:
-                return True
-            if attempt + 1 < attempts:
-                time.sleep(delay * (attempt + 1))
-        return False
+        confirmed = self.wait_until_all_completed(
+            event_ids, attempts=attempts, delay=delay
+        )
+        return bool(event_ids & confirmed)
 
 
 def event_has_ended(payload: Mapping[str, Any], today: Optional[date] = None) -> bool:
@@ -302,6 +343,18 @@ def build_parser() -> argparse.ArgumentParser:
         prog="bulletin-quiz",
         description="查詢 104 佈告欄未完成紀錄、自動選出正確答案並登記。",
     )
+    parser.add_argument(
+        "employee_id",
+        nargs="?",
+        help="員工編號，例如 3395",
+    )
+    parser.add_argument(
+        "-e",
+        "--employee-id",
+        dest="employee_id_opt",
+        metavar="EMPLOYEE_ID",
+        help="員工編號（亦可直接以位置參數帶入）",
+    )
     parser.add_argument("--config", help="設定檔路徑（預設 bulletin-quiz.json）")
     parser.add_argument("--slug", help="只處理指定文章尾碼，例如 20260831_BeAGiver")
     parser.add_argument(
@@ -320,12 +373,18 @@ def main(
 ) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+
+    employee_id = args.employee_id or args.employee_id_opt
+    if not employee_id:
+        print("錯誤：請提供員工編號（例如：bulletin-quiz 3395）", file=sys.stderr)
+        return 2
+
     project_root = (project_root or Path(__file__).resolve().parent.parent).resolve()
     runtime_env = dict(os.environ if environ is None else environ)
     config_path = find_config_path(project_root, args.config, runtime_env)
 
     try:
-        config = load_config(config_path)
+        config = load_config(config_path, employee_id)
         service = BulletinService(config, HttpClient(config.employee_id))
         events, completed = service.query_records()
         pending = select_events(events, completed, args.slug)
@@ -348,40 +407,116 @@ def main(
             print("✓ 沒有未完成的公告。")
         return 0
 
-    failures = 0
-    for index, event in enumerate(pending, start=1):
-        print(f"\n[{index}/{len(pending)}] {event.slug}｜{event.title}")
-        print(f"  表單：{service.form_url(event)}")
+    # 1. 併發抓取所有待處理表單
+    forms_cache: dict[str, Any] = {}
+    if len(pending) > 1:
+        with ThreadPoolExecutor(max_workers=min(8, len(pending))) as executor:
+            future_to_event = {
+                executor.submit(service.load_form, event): event for event in pending
+            }
+            for future in as_completed(future_to_event):
+                event = future_to_event[future]
+                try:
+                    forms_cache[event.key] = future.result()
+                except Exception as exc:
+                    forms_cache[event.key] = exc
+
+    # 2. 結構化解析各篇公告與題目
+    tasks: list[dict[str, Any]] = []
+    for event in pending:
+        task: dict[str, Any] = {
+            "event": event,
+            "ad": event.key,
+            "form": None,
+            "question": "",
+            "answer": "",
+            "skip": False,
+            "error": None,
+            "verified": False,
+        }
+        res = forms_cache.get(event.key)
         try:
-            ad, form = service.load_form(event)
-            if bool(form.get("CHK")):
-                print("  ✓ 表單回報已完成，略過重複登記。")
-                continue
-            if event_has_ended(form):
-                print(f"  ✗ 活動已於 {form.get('ET')} 結束。", file=sys.stderr)
-                failures += 1
-                continue
-
-            question, answer = question_details(form)
-            if question:
-                print(f"  題目：{question}")
-                print(f"  作答：{answer}")
+            if isinstance(res, Exception):
+                raise res
+            elif res is not None:
+                ad, form = res
             else:
-                print("  此公告沒有題目。")
+                ad, form = service.load_form(event)
 
-            if args.dry_run:
-                print("  DRY RUN：未送出登記。")
-                continue
+            task["ad"] = ad
+            task["form"] = form
 
-            # The web page labels Q.Answer as value=1. A wrong option is rejected
-            # entirely in JavaScript, so only the correct choice reaches this POST.
-            service.submit(ad)
-            if not service.wait_until_completed({event.key, ad}):
-                raise BulletinError("送出後重新查詢，點閱紀錄仍未顯示完成")
-            print("  ✓ 已送出正確答案，且點閱紀錄驗證完成。")
+            if bool(form.get("CHK")):
+                task["skip"] = True
+            elif event_has_ended(form):
+                task["error"] = f"活動已於 {form.get('ET')} 結束。"
+            else:
+                question, answer = question_details(form)
+                task["question"] = question
+                task["answer"] = answer
         except BulletinError as exc:
+            task["error"] = str(exc)
+
+        tasks.append(task)
+
+    # 3. 若非 dry-run，併發送出作答並批次驗證點閱紀錄
+    if not args.dry_run:
+        to_submit = [t for t in tasks if not t["skip"] and not t["error"]]
+        if to_submit:
+            def _submit_task(t: dict[str, Any]) -> None:
+                try:
+                    service.submit(t["ad"])
+                except BulletinError as exc:
+                    t["error"] = str(exc)
+
+            if len(to_submit) > 1:
+                with ThreadPoolExecutor(max_workers=min(8, len(to_submit))) as executor:
+                    list(executor.map(_submit_task, to_submit))
+            else:
+                _submit_task(to_submit[0])
+
+            # 收集成功送出的 ID 進行統一批次驗證
+            pending_verify = [t for t in to_submit if not t["error"]]
+            if pending_verify:
+                target_ids = {t["event"].key for t in pending_verify} | {
+                    t["ad"] for t in pending_verify if t.get("ad")
+                }
+                confirmed = service.wait_until_all_completed(target_ids)
+                for t in pending_verify:
+                    if t["event"].key in confirmed or t["ad"] in confirmed:
+                        t["verified"] = True
+                    else:
+                        t["error"] = "送出後重新查詢，點閱紀錄仍未顯示完成"
+
+    # 4. 依原始順序格式化輸出每篇公告結果
+    failures = 0
+    for index, task in enumerate(tasks, start=1):
+        event = task["event"]
+        print(f"\n[{index}/{len(tasks)}] {event.slug}｜{event.title}")
+        print(f"  表單：{service.form_url(event)}")
+
+        if task["skip"]:
+            print("  ✓ 表單回報已完成，略過重複登記。")
+            continue
+
+        if task["error"]:
             failures += 1
-            print(f"  ✗ {exc}", file=sys.stderr)
+            print(f"  ✗ {task['error']}", file=sys.stderr)
+            continue
+
+        if task["question"]:
+            print(f"  題目：{task['question']}")
+            print(f"  作答：{task['answer']}")
+        else:
+            print("  此公告沒有題目。")
+
+        if args.dry_run:
+            print("  DRY RUN：未送出登記。")
+        elif task["verified"]:
+            print("  ✓ 已送出正確答案，且點閱紀錄驗證完成。")
+        else:
+            failures += 1
+            print("  ✗ 送出後重新查詢，點閱紀錄仍未顯示完成", file=sys.stderr)
 
     if failures:
         print(f"\n完成：成功 {len(pending) - failures}、失敗 {failures}。")

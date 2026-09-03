@@ -85,5 +85,21 @@ if typeset -f compdef &>/dev/null || autoload -Uz compinit 2>/dev/null; then
     fi
   }
 
+  _bulletin_quiz_autocomplete() {
+    local -a flags
+    flags=(
+      '--dry-run[查詢題目與答案，但不送出登記]'
+      '--slug[只處理指定文章尾碼，例如 20260831_BeAGiver]:slug'
+      '--config[設定檔路徑]:config file:_files'
+      '-e[員工編號]:employee id'
+      '--employee-id[員工編號]:employee id'
+      '-h[顯示說明訊息]'
+      '--help[顯示說明訊息]'
+    )
+    _describe 'options' flags
+  }
+
   compdef _pr_scan_autocomplete pr-scan 2>/dev/null || true
+  compdef _bulletin_quiz_autocomplete bulletin-quiz 2>/dev/null || true
 fi
+

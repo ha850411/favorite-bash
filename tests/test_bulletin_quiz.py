@@ -61,18 +61,34 @@ class BulletinQuizTests(unittest.TestCase):
     def test_load_config_validates_and_keeps_employee_id_as_string(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "config.json"
-            path.write_text(json.dumps({"employee_id": 3395}), encoding="utf-8")
-            config = quiz.load_config(path)
+            path.write_text(
+                json.dumps({"search_url": "https://custom.example/search.html"}),
+                encoding="utf-8",
+            )
+            config = quiz.load_config(path, employee_id=3395)
 
         self.assertEqual(config.employee_id, "3395")
-        self.assertEqual(config.search_url, quiz.DEFAULT_SEARCH_URL)
+        self.assertEqual(config.search_url, "https://custom.example/search.html")
 
     def test_load_config_rejects_invalid_employee_id(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "config.json"
-            path.write_text(json.dumps({"employee_id": "33 95"}), encoding="utf-8")
-            with self.assertRaisesRegex(quiz.BulletinError, "employee_id"):
-                quiz.load_config(path)
+            path.write_text("{}", encoding="utf-8")
+            with self.assertRaisesRegex(quiz.BulletinError, "員工編號"):
+                quiz.load_config(path, employee_id="33 95")
+
+    def test_main_requires_employee_id(self):
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch("sys.stderr", new_callable=io.StringIO) as stderr,
+        ):
+            result = quiz.main(
+                ["--dry-run"],
+                project_root=Path(directory),
+                environ={},
+            )
+        self.assertEqual(result, 2)
+        self.assertIn("請提供員工編號", stderr.getvalue())
 
     def test_event_derives_shared_slug_from_article_url(self):
         event = quiz.Event(
@@ -121,7 +137,6 @@ class BulletinQuizTests(unittest.TestCase):
 
     def test_dry_run_does_not_post(self):
         client = FakeClient()
-        config = quiz.Config("3395")
         with (
             tempfile.TemporaryDirectory() as directory,
             patch.object(quiz, "HttpClient", return_value=client),
@@ -129,10 +144,13 @@ class BulletinQuizTests(unittest.TestCase):
         ):
             config_path = Path(directory) / "bulletin-quiz.json"
             config_path.write_text(
-                json.dumps({"employee_id": "3395"}), encoding="utf-8"
+                json.dumps({
+                    "search_url": "https://bulletin-104.s3-ap-northeast-1.amazonaws.com/search.html"
+                }),
+                encoding="utf-8",
             )
             result = quiz.main(
-                ["--config", str(config_path), "--dry-run"],
+                ["3395", "--config", str(config_path), "--dry-run"],
                 project_root=Path(directory),
                 environ={},
             )
@@ -150,11 +168,9 @@ class BulletinQuizTests(unittest.TestCase):
             patch("sys.stdout", new_callable=io.StringIO) as stdout,
         ):
             config_path = Path(directory) / "bulletin-quiz.json"
-            config_path.write_text(
-                json.dumps({"employee_id": "3395"}), encoding="utf-8"
-            )
+            config_path.write_text("{}", encoding="utf-8")
             result = quiz.main(
-                ["--config", str(config_path), "--slug", "20260831_BeAGiver"],
+                ["3395", "--config", str(config_path), "--slug", "20260831_BeAGiver"],
                 project_root=Path(directory),
                 environ={},
             )
@@ -163,6 +179,83 @@ class BulletinQuizTests(unittest.TestCase):
         self.assertEqual(len(client.posts), 1)
         self.assertIn("點閱紀錄驗證完成", stdout.getvalue())
 
+    def test_main_supports_flag_and_no_config_file(self):
+        client = FakeClient()
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.object(quiz, "HttpClient", return_value=client),
+            patch("sys.stdout", new_callable=io.StringIO) as stdout,
+        ):
+            result = quiz.main(
+                ["-e", "3395", "--dry-run"],
+                project_root=Path(directory),
+                environ={},
+            )
+
+    def test_live_flow_concurrently_posts_multiple_articles_and_verifies(self):
+        class MultiFakeClient:
+            def __init__(self):
+                self.posts = []
+                self.submitted_ids = set()
+
+            def text(self, url):
+                if url.endswith("search.html"):
+                    return "var apiUrl = 'https://api.example/prod';", url
+                return "<html></html>", url
+
+            def json(self, url, *, method="GET", json_body=None):
+                if "/bulletin/check?" in url:
+                    records = [{"EventID": eid} for eid in self.submitted_ids]
+                    return {
+                        "event": [
+                            {
+                                "ST": "2026/08/31",
+                                "RU": "https://sharepoint.example/20260831_BeAGiver.aspx\n",
+                                "KeyName": "guid-1",
+                                "TX": "Article 1",
+                            },
+                            {
+                                "ST": "2026/08/30",
+                                "RU": "https://sharepoint.example/20260830_Intern.aspx\n",
+                                "KeyName": "guid-2",
+                                "TX": "Article 2",
+                            },
+                        ],
+                        "record": records,
+                    }, url
+                if method == "POST":
+                    self.posts.append((url, json_body))
+                    self.submitted_ids.add(json_body.get("EVENT_ID"))
+                    return {"ok": True}, url
+                return {
+                    "ET": "2099/09/10",
+                    "CHK": False,
+                    "Q": {
+                        "Text": "題目？",
+                        "Answer": "答案",
+                    },
+                }, url
+
+        client = MultiFakeClient()
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch.object(quiz, "HttpClient", return_value=client),
+            patch("sys.stdout", new_callable=io.StringIO) as stdout,
+        ):
+            config_path = Path(directory) / "bulletin-quiz.json"
+            config_path.write_text("{}", encoding="utf-8")
+            result = quiz.main(
+                ["3395", "--config", str(config_path)],
+                project_root=Path(directory),
+                environ={},
+            )
+
+        self.assertEqual(result, 0)
+        self.assertEqual(len(client.posts), 2)
+        self.assertEqual(stdout.getvalue().count("點閱紀錄驗證完成"), 2)
+        self.assertIn("成功 2、失敗 0", stdout.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()
+
