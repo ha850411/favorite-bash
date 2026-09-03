@@ -256,6 +256,7 @@ fi
 
 python3 -c '
 import sys, os, subprocess, json, fnmatch, termios, tty, select
+from concurrent.futures import ThreadPoolExecutor
 
 C_CYAN = "\033[1;36m"
 C_GREEN = "\033[1;32m"
@@ -426,43 +427,61 @@ def clear_screen():
         sys.stdout.write("\033[H\033[J")
         sys.stdout.flush()
 
-print(f"{C_CYAN}🔍 正在掃描 {len(all_repos)} 個 Repositories 中的分支與變更... (設定檔: {config_file}){C_RESET}")
+print(f"{C_CYAN}🔍 正在平行掃描 {len(all_repos)} 個 Repositories 中的分支與變更... (設定檔: {config_file}){C_RESET}")
 
-items = []
-for idx, repo in enumerate(all_repos, 1):
-    res_a = subprocess.run(["gh", "api", f"repos/{repo}/branches/{branch_a}", "--silent"], capture_output=True)
-    has_a = (res_a.returncode == 0)
+def scan_single_repo(item_args):
+    idx, repo = item_args
+    try:
+        res_a = subprocess.run(["gh", "api", f"repos/{repo}/branches/{branch_a}", "--silent"], capture_output=True)
+        has_a = (res_a.returncode == 0)
 
-    has_b = False
-    if has_a:
-        res_b = subprocess.run(["gh", "api", f"repos/{repo}/branches/{branch_b}", "--silent"], capture_output=True)
-        has_b = (res_b.returncode == 0)
+        has_b = False
+        if has_a:
+            res_b = subprocess.run(["gh", "api", f"repos/{repo}/branches/{branch_b}", "--silent"], capture_output=True)
+            has_b = (res_b.returncode == 0)
 
-    default_base, source_label = get_repo_default_base(repo, branch_b)
-    initial_base = arg_base_of_b if arg_base_of_b else default_base
+        default_base, source_label = get_repo_default_base(repo, branch_b)
+        initial_base = arg_base_of_b if arg_base_of_b else default_base
 
-    # Check diff if Branch A exists
-    compare_target_base = branch_b if has_b else initial_base
-    diff_info = {"commits_count": 0, "files_count": 0, "additions": 0, "deletions": 0, "commits": [], "files": []}
-    if has_a:
-        diff_info = fetch_compare_diff(repo, branch_a, compare_target_base)
+        # Check diff if Branch A exists
+        compare_target_base = branch_b if has_b else initial_base
+        diff_info = {"commits_count": 0, "files_count": 0, "additions": 0, "deletions": 0, "commits": [], "files": []}
+        if has_a:
+            diff_info = fetch_compare_diff(repo, branch_a, compare_target_base)
 
-    has_changes = diff_info["commits_count"] > 0
-    existing_pr = check_existing_pr(repo, branch_a, branch_b) if (has_a and has_b) else None
+        has_changes = diff_info["commits_count"] > 0
+        existing_pr = check_existing_pr(repo, branch_a, branch_b) if (has_a and has_b) else None
 
-    items.append({
-        "index": idx,
-        "repo": repo,
-        "has_a": has_a,
-        "has_b": has_b,
-        "default_base": default_base,
-        "selected_base": initial_base,
-        "source_label": source_label,
-        "diff": diff_info,
-        "has_changes": has_changes,
-        "existing_pr": existing_pr,
-        "selected": (has_a and (has_changes or existing_pr is not None))
-    })
+        return {
+            "index": idx,
+            "repo": repo,
+            "has_a": has_a,
+            "has_b": has_b,
+            "default_base": default_base,
+            "selected_base": initial_base,
+            "source_label": source_label,
+            "diff": diff_info,
+            "has_changes": has_changes,
+            "existing_pr": existing_pr,
+            "selected": (has_a and (has_changes or existing_pr is not None))
+        }
+    except Exception:
+        return {
+            "index": idx,
+            "repo": repo,
+            "has_a": False,
+            "has_b": False,
+            "default_base": "main",
+            "selected_base": "main",
+            "source_label": "錯誤",
+            "diff": {"commits_count": 0, "files_count": 0, "additions": 0, "deletions": 0, "commits": [], "files": []},
+            "has_changes": False,
+            "existing_pr": None,
+            "selected": False
+        }
+
+with ThreadPoolExecutor(max_workers=min(16, len(all_repos))) as executor:
+    items = list(executor.map(scan_single_repo, enumerate(all_repos, 1)))
 
 matched_count = sum(1 for item in items if item["has_a"])
 if matched_count == 0:

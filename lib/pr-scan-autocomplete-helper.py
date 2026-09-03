@@ -64,22 +64,28 @@ def get_local_git_branches():
 
 def get_cached_remote_branches(tracked_repos, config_path):
     cache_path = get_cache_path()
+    cached_data = None
+    is_stale = True
     if os.path.exists(cache_path):
         try:
             with open(cache_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                return data.get("repos", {})
+                cached_data = data.get("repos", {})
+                timestamp = data.get("timestamp", 0)
+                if time.time() - timestamp < 600:
+                    is_stale = False
         except Exception:
             pass
 
-    # Non-blocking background fetch if missing
-    try:
-        bg_cmd = f"python3 -c \"import json, time, subprocess, sys, os; repos={tracked_repos}; cache_data={{}}; [cache_data.update({{r: subprocess.run(['gh', 'api', f'repos/{{r}}/branches?per_page=100', '--jq', '.[].name'], capture_output=True, text=True, timeout=3).stdout.splitlines()}}) for r in repos]; open('{cache_path}', 'w').write(json.dumps({{'timestamp': time.time(), 'repos': cache_data}}))\" &"
-        os.system(bg_cmd)
-    except Exception:
-        pass
+    # Non-blocking background fetch if missing or stale
+    if is_stale and tracked_repos:
+        try:
+            bg_cmd = f"python3 -c \"import json, time, subprocess, sys, os; from concurrent.futures import ThreadPoolExecutor; repos={tracked_repos}; fetch=lambda r: (r, subprocess.run(['gh', 'api', f'repos/{{r}}/branches?per_page=100', '--jq', '.[].name'], capture_output=True, text=True, timeout=5).stdout.splitlines()); results=dict(ThreadPoolExecutor(max_workers=min(16, len(repos))).map(fetch, repos)); open('{cache_path}', 'w').write(json.dumps({{'timestamp': time.time(), 'repos': results}}))\" &"
+            os.system(bg_cmd)
+        except Exception:
+            pass
 
-    return {}
+    return cached_data if cached_data is not None else {}
 
 def main():
     if len(sys.argv) < 2:
