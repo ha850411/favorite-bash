@@ -493,7 +493,13 @@ def main(
     failures = 0
     for index, task in enumerate(tasks, start=1):
         event = task["event"]
-        print(f"\n[{index}/{len(tasks)}] {event.slug}｜{event.title}")
+        print(f"\n[{index}/{len(tasks)}] {event.title or event.slug}")
+        if event.start_date:
+            form_et = task["form"].get("ET") if task.get("form") else None
+            date_info = f"  公告日期：{event.start_date}"
+            if form_et:
+                date_info += f"（截止：{str(form_et).strip()}）"
+            print(date_info)
         print(f"  表單：{service.form_url(event)}")
 
         if task["skip"]:

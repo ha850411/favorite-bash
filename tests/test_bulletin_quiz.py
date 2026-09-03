@@ -157,6 +157,8 @@ class BulletinQuizTests(unittest.TestCase):
 
         self.assertEqual(result, 0)
         self.assertEqual(client.posts, [])
+        self.assertIn("2026/08/31", stdout.getvalue())
+        self.assertIn("公告日期：2026/08/31", stdout.getvalue())
         self.assertIn("作答：高雄市", stdout.getvalue())
         self.assertIn("未送出任何登記", stdout.getvalue())
 
