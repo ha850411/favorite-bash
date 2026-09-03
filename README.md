@@ -11,7 +11,7 @@
 ```
 此動作會：
 1. 將 `bin/` 下所有指令軟連結（symlink）至 `~/.local/bin/`。
-2. 將全域設定檔軟連結至 `~/.config/favorite-bash/pr-scan.json`。
+2. 將 `pr-scan.json` 與 `bulletin-quiz.json` 軟連結至 `~/.config/favorite-bash/`。
 3. 將專案入口與 Zsh Tab 補全載入點寫入 `~/.zshrc`。
 4. **自動替換進程重載 Shell（`exec zsh`），當下視窗即時生效所有指令與 Tab 分支自動補全！無須輸入任何多餘指令。**
 
@@ -258,4 +258,39 @@ feature-branch-scan --json
 - `q`：取消並離開，不刪除任何 branch
 
 判定依據為 Jira `fields.status.statusCategory.key == "done"`，不依賴工作流程中可能客製化的狀態名稱。
+
 若任一 GitHub repository 或 Jira issue 查詢失敗，仍會輸出已取得的部分結果，並以 exit code `2` 結束，避免把未知狀態誤列為可刪除。
+
+---
+
+### 5. `bulletin-quiz`
+
+查詢 104 佈告欄近兩個月的點閱紀錄，自動處理尚未完成的公告題目，送出後會再次查詢並確認點閱紀錄已完成。
+
+員工編號放在 `bulletin-quiz.json`，每位使用者可自行修改：
+
+```json
+{
+  "employee_id": "3395",
+  "search_url": "https://bulletin-104.s3-ap-northeast-1.amazonaws.com/search.html",
+  "short_link_base": "https://o.104.tw"
+}
+```
+
+指令會由 SharePoint 文章網址尾碼（例如 `20260831_BeAGiver.aspx`）自動推導表單短網址 `https://o.104.tw/20260831_BeAGiver`。目前頁面會在題目資料中標示正確選項，錯誤選項只由瀏覽器前端攔截，因此指令會直接選正確答案，再送出一次登記。
+
+**使用方式：**
+
+```bash
+# 預覽所有未完成公告的題目與答案，不送出
+bulletin-quiz --dry-run
+
+# 完成所有未完成公告
+bulletin-quiz
+
+# 只處理指定文章尾碼
+bulletin-quiz --slug 20260831_BeAGiver
+
+# 使用另一份個人設定檔
+bulletin-quiz --config /path/to/bulletin-quiz.json
+```

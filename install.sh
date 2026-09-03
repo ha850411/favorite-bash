@@ -24,12 +24,14 @@ for cmd_path in "${SCRIPT_DIR}"/bin/*; do
   fi
 done
 
-# 3. 確保設定檔 pr-scan.json 軟連結至 ~/.config/favorite-bash/pr-scan.json
+# 3. 將專案設定檔軟連結至 ~/.config/favorite-bash/
 mkdir -p "${TARGET_CONFIG_DIR}"
-if [[ -f "${SCRIPT_DIR}/pr-scan.json" ]]; then
-  ln -sf "${SCRIPT_DIR}/pr-scan.json" "${TARGET_CONFIG_DIR}/pr-scan.json"
-  echo -e "  ${GREEN}✔${RESET} 建立設定檔軟連結: ${TARGET_CONFIG_DIR}/pr-scan.json -> ${SCRIPT_DIR}/pr-scan.json"
-fi
+for config_name in pr-scan.json bulletin-quiz.json; do
+  if [[ -f "${SCRIPT_DIR}/${config_name}" ]]; then
+    ln -sf "${SCRIPT_DIR}/${config_name}" "${TARGET_CONFIG_DIR}/${config_name}"
+    echo -e "  ${GREEN}✔${RESET} 建立設定檔軟連結: ${TARGET_CONFIG_DIR}/${config_name} -> ${SCRIPT_DIR}/${config_name}"
+  fi
+done
 
 # 4. 檢查並將專案入口引用寫入 ~/.zshrc (載入 Zsh Tab Autocomplete 自動補全)
 ZSHRC="${HOME}/.zshrc"
