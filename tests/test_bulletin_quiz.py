@@ -282,7 +282,111 @@ class BulletinQuizTests(unittest.TestCase):
         self.assertEqual(stdout.getvalue().count("點閱紀錄驗證完成"), 2)
         self.assertIn("成功 2、失敗 0", stdout.getvalue())
 
+    def test_parse_schedule_time_valid_and_invalid(self):
+        self.assertEqual(quiz.parse_schedule_time("10:00"), (10, 0))
+        self.assertEqual(quiz.parse_schedule_time("09:30"), (9, 30))
+        self.assertEqual(quiz.parse_schedule_time("23:59"), (23, 59))
+        self.assertEqual(quiz.parse_schedule_time("0:00"), (0, 0))
+
+        with self.assertRaisesRegex(quiz.BulletinError, "排程時間格式錯誤"):
+            quiz.parse_schedule_time("24:00")
+        with self.assertRaisesRegex(quiz.BulletinError, "排程時間格式錯誤"):
+            quiz.parse_schedule_time("invalid")
+        with self.assertRaisesRegex(quiz.BulletinError, "排程時間格式錯誤"):
+            quiz.parse_schedule_time("10:60")
+
+    def test_build_launchd_plist_dict(self):
+        plist = quiz.build_launchd_plist_dict(
+            label="test.label",
+            cli_path=Path("/bin/test-cli"),
+            employee_id="3395",
+            hour=10,
+            minute=0,
+            log_path=Path("/tmp/test.log"),
+            path_env="/usr/bin:/bin",
+            config_path="/tmp/cfg.json",
+            dry_run=True,
+        )
+        self.assertEqual(plist["Label"], "test.label")
+        self.assertEqual(plist["StartCalendarInterval"], {"Hour": 10, "Minute": 0})
+        self.assertEqual(plist["StandardOutPath"], "/tmp/test.log")
+        expected_config = Path("/tmp/cfg.json").resolve()
+        self.assertIn(f"/bin/test-cli 3395 --config {expected_config} -d", plist["ProgramArguments"][2])
+
+    def test_handle_schedule_rejects_non_darwin(self):
+        with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+            code = quiz.handle_schedule("status", system_platform="linux")
+        self.assertEqual(code, 2)
+        self.assertIn("僅支援 macOS", stderr.getvalue())
+
+    def test_handle_schedule_enable_requires_employee_id(self):
+        with patch("sys.stderr", new_callable=io.StringIO) as stderr:
+            code = quiz.handle_schedule("enable", employee_id=None, system_platform="darwin")
+        self.assertEqual(code, 2)
+        self.assertIn("請提供員工編號", stderr.getvalue())
+
+    def test_handle_schedule_enable_and_disable(self):
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            patch("subprocess.run") as mock_run,
+            patch("sys.stdout", new_callable=io.StringIO) as stdout,
+        ):
+            mock_run.return_value.returncode = 0
+            mock_run.return_value.stderr = ""
+            agents_dir = Path(temp_dir) / "LaunchAgents"
+            log_file = Path(temp_dir) / "test.log"
+
+            code = quiz.handle_schedule(
+                "enable",
+                employee_id="3395",
+                schedule_time="10:00",
+                agents_dir=agents_dir,
+                log_file=log_file,
+                label="test.label",
+                system_platform="darwin",
+            )
+            self.assertEqual(code, 0)
+            plist_file = agents_dir / "test.label.plist"
+            self.assertTrue(plist_file.exists())
+            self.assertIn("已成功啟用 macOS launchd 排程", stdout.getvalue())
+
+            # Test status when enabled
+            with patch("sys.stdout", new_callable=io.StringIO) as status_out:
+                status_code = quiz.handle_schedule(
+                    "status",
+                    agents_dir=agents_dir,
+                    log_file=log_file,
+                    label="test.label",
+                    system_platform="darwin",
+                )
+                self.assertEqual(status_code, 0)
+                self.assertIn("已啟用", status_out.getvalue())
+                self.assertIn("3395", status_out.getvalue())
+
+            # Test disable
+            with patch("sys.stdout", new_callable=io.StringIO) as disable_out:
+                disable_code = quiz.handle_schedule(
+                    "disable",
+                    agents_dir=agents_dir,
+                    label="test.label",
+                    system_platform="darwin",
+                )
+                self.assertEqual(disable_code, 0)
+                self.assertFalse(plist_file.exists())
+                self.assertIn("已停用", disable_out.getvalue())
+
+    def test_main_schedule_routing(self):
+        with patch.object(quiz, "handle_schedule", return_value=0) as mock_handle:
+            code = quiz.main(["3395", "--schedule", "enable", "--schedule-time", "11:00"])
+            self.assertEqual(code, 0)
+            mock_handle.assert_called_once()
+            args, kwargs = mock_handle.call_args
+            self.assertEqual(args[0], "enable")
+            self.assertEqual(kwargs["employee_id"], "3395")
+            self.assertEqual(kwargs["schedule_time"], "11:00")
+
 
 if __name__ == "__main__":
     unittest.main()
+
 

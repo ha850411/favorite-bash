@@ -292,5 +292,21 @@ bulletin-quiz 3395 --slug 20260831_BeAGiver
 
 # 使用另一份個人設定檔
 bulletin-quiz 3395 --config /path/to/bulletin-quiz.json
+
+# 啟用每日自動排程（macOS launchd，預設每天 10:00，電腦睡眠喚醒時自動補跑）
+bulletin-quiz 3395 --schedule enable
+
+# 自訂排程時間（例如每天 09:30）
+bulletin-quiz 3395 --schedule enable --schedule-time 09:30
+
+# 查看排程狀態與最近執行日誌
+bulletin-quiz --schedule status
+
+# 立即手動測試觸發一次排程
+bulletin-quiz --schedule run
+
+# 停用並移除排程
+bulletin-quiz --schedule disable
 ```
+
 
