@@ -183,7 +183,7 @@ function _pr_review_labeled_lines() {
 # 動態繪製單張 PR 卡片（Pixel-Perfect 精確對齊版）
 function _pr_review_render_card() {
   emulate -L zsh
-  setopt multibyte
+  setopt multibyte extendedglob
 
   local is_focused="$1"
   local is_checked="$2"
@@ -246,6 +246,12 @@ function _pr_review_render_card() {
   print -r -- " ${C_POINTER} ${C_BORDER}╭─${C_CHECK}${C_BORDER}─${top_rule}╮${C_RESET}"
 
   # 2. Header Line (Repo, Number, Draft)
+  local osc8_start="" osc8_end=""
+  if [[ -n "$url" ]]; then
+    osc8_start=$'\e]8;;'"${url}"$'\a'
+    osc8_end=$'\e]8;;\a'
+  fi
+
   local raw_first="${repo} · #${number}"
   local vis_first pad_first
   if [[ "$draft" == "true" ]]; then
@@ -253,7 +259,7 @@ function _pr_review_render_card() {
     vis_first="${REPLY%%[[:space:]]##}"
     pad_first="${REPLY#$vis_first}"
     if [[ "$vis_first" == "$raw_first" ]]; then
-      print -r -- "   ${C_BORDER}│${C_RESET}  ${C_REPO}${repo}${C_RESET} · ${C_NUMBER}#${number}${C_RESET}${pad_first} ${C_DRAFT}  ${C_BORDER}│${C_RESET}"
+      print -r -- "   ${C_BORDER}│${C_RESET}  ${C_REPO}${repo}${C_RESET} · ${osc8_start}${C_NUMBER}#${number}${C_RESET}${osc8_end}${pad_first} ${C_DRAFT}  ${C_BORDER}│${C_RESET}"
     else
       print -r -- "   ${C_BORDER}│${C_RESET}  ${C_REPO}${vis_first}${C_RESET}${pad_first} ${C_DRAFT}  ${C_BORDER}│${C_RESET}"
     fi
@@ -262,7 +268,7 @@ function _pr_review_render_card() {
     vis_first="${REPLY%%[[:space:]]##}"
     pad_first="${REPLY#$vis_first}"
     if [[ "$vis_first" == "$raw_first" ]]; then
-      print -r -- "   ${C_BORDER}│${C_RESET}  ${C_REPO}${repo}${C_RESET} · ${C_NUMBER}#${number}${C_RESET}${pad_first}  ${C_BORDER}│${C_RESET}"
+      print -r -- "   ${C_BORDER}│${C_RESET}  ${C_REPO}${repo}${C_RESET} · ${osc8_start}${C_NUMBER}#${number}${C_RESET}${osc8_end}${pad_first}  ${C_BORDER}│${C_RESET}"
     else
       print -r -- "   ${C_BORDER}│${C_RESET}  ${C_REPO}${vis_first}${C_RESET}${pad_first}  ${C_BORDER}│${C_RESET}"
     fi
@@ -314,12 +320,12 @@ function _pr_review_render_card() {
   pad_val="${REPLY#$vis_val}"
   print -r -- "   ${C_BORDER}│${C_RESET}     ${C_LABEL}Author ${C_RESET} │ ${C_AUTHOR}${vis_val}${C_RESET}${pad_val}  ${C_BORDER}│${C_RESET}"
 
-  # URL
+  # URL (使用 OSC 8 超連結，點選時精確開啟指定網址，避免終端誤將邊框字符納入網址)
   raw_val="${url}"
   _pr_review_fit_cell "$raw_val" "$val_width"
   vis_val="${REPLY%%[[:space:]]##}"
   pad_val="${REPLY#$vis_val}"
-  print -r -- "   ${C_BORDER}│${C_RESET}     ${C_LABEL}URL    ${C_RESET} │ ${C_URL}${vis_val}${C_RESET}${pad_val}  ${C_BORDER}│${C_RESET}"
+  print -r -- "   ${C_BORDER}│${C_RESET}     ${C_LABEL}URL    ${C_RESET} │ ${osc8_start}${C_URL}${vis_val}${C_RESET}${osc8_end}${pad_val}  ${C_BORDER}│${C_RESET}"
 
   # 6. Bottom Border - 精確 100% 對齊
   local bot_rule=""
@@ -412,7 +418,7 @@ function _pr_review_menu() {
     fi
 
     print
-    print -r -- $'\e[90m [↑/k] 向上  [↓/j] 向下  [Space] 選擇  [a] 全選  [Enter] 批次審核  [q] 離開\e[0m'
+    print -r -- $'\e[90m [↑/k] 向上  [↓/j] 向下  [Space] 選擇  [a] 全選  [o] 開啟連結  [Enter] 批次審核  [q] 離開\e[0m'
 
     if ! read -rs -k 1 key; then
       print -n -- $'\e[?25h\e[?1049l'
@@ -460,6 +466,16 @@ function _pr_review_menu() {
         else
           for (( i = 1; i <= total_items; i++ )); do checked[i]=1; done
           selected_count=$total_items
+        fi
+        ;;
+      o|O)
+        local cur_url="${urls[cursor]}"
+        if [[ -n "$cur_url" ]]; then
+          if (( $+commands[open] )); then
+            open "$cur_url" 2>/dev/null
+          elif (( $+commands[xdg-open] )); then
+            xdg-open "$cur_url" 2>/dev/null
+          fi
         fi
         ;;
       $'\n'|$'\r')
@@ -564,7 +580,12 @@ function pr-reviews() {
 
   for (( index = 1; index <= ${#urls}; index++ )); do
     url="${urls[index]}"
-    print -n -- $'\e[90m['"$index"'/'"${#urls}"$']\e[0m Approving: \e[1;34m'"$url"$'\e[0m ... '
+    local osc8_start="" osc8_end=""
+    if [[ -n "$url" ]]; then
+      osc8_start=$'\e]8;;'"${url}"$'\a'
+      osc8_end=$'\e]8;;\a'
+    fi
+    print -n -- $'\e[90m['"$index"'/'"${#urls}"$']\e[0m Approving: '"$osc8_start"$'\e[1;34m'"$url"$'\e[0m'"$osc8_end"' ... '
     if gh pr review "$url" --approve >/dev/null 2>&1; then
       print -r -- $'\e[1;32m✔ Approved\e[0m'
     else
@@ -614,7 +635,9 @@ function pr-review() {
   local url failures=0
   for url in "${urls[@]}"; do
     if [[ -n "$url" ]]; then
-      print -n -- $'  Approving: \e[1;34m'"$url"$'\e[0m ... '
+      local osc8_start=$'\e]8;;'"${url}"$'\a'
+      local osc8_end=$'\e]8;;\a'
+      print -n -- $'  Approving: '"$osc8_start"$'\e[1;34m'"$url"$'\e[0m'"$osc8_end"' ... '
       if gh pr review "$url" --approve >/dev/null 2>&1; then
         print -r -- $'\e[1;32m✔ Approved\e[0m'
       else

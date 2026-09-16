@@ -100,7 +100,83 @@ if typeset -f compdef &>/dev/null || autoload -Uz compinit 2>/dev/null; then
     _describe 'options' flags
   }
 
+  _release_pr_autocomplete() {
+    local -a flags
+    flags=(
+      '-i[指定 Jira 需求單號]:issue'
+      '--issue[指定 Jira 需求單號]:issue'
+      '-d[僅併發掃描與預覽，不實際在 GitHub 建立 PR]'
+      '--dry-run[僅併發掃描與預覽，不實際在 GitHub 建立 PR]'
+      '-r[指定 PR Reviewer 使用者名稱]:reviewer'
+      '--reviewer[指定 PR Reviewer 使用者名稱]:reviewer'
+      '-c[指定設定檔路徑]:config:_files'
+      '--config[指定設定檔路徑]:config:_files'
+      '-h[顯示說明訊息]'
+      '--help[顯示說明訊息]'
+    )
+
+    if [[ $CURRENT -eq 2 ]]; then
+      _message '上線單號 (例如: PMOJBVIP-30282)'
+    elif [[ $CURRENT -eq 3 ]]; then
+      local -a release_branches
+      release_branches=("${(f)$(git branch -a --format='%(refname:short)' 2>/dev/null | grep -E '(^|/)release/' | sed -e 's#^origin/##' | sort -u)}")
+      if [[ ${#release_branches} -gt 0 ]]; then
+        _describe 'release branches' release_branches
+      else
+        _message '來源 Release 分支 (例如: release/SERVICE-0922)'
+      fi
+    elif [[ $CURRENT -eq 4 ]]; then
+      local -a envs
+      envs=(
+        'staging:預發布環境 (STG)'
+        'develop:開發基準環境 (Develop)'
+        'prod:正式發布環境 (PROD)'
+      )
+      _describe '目標環境' envs
+    else
+      _describe 'options' flags
+    fi
+  }
+
+  _merge_pr_autocomplete() {
+    local -a flags
+    flags=(
+      '-m[指定 Git 合併方式 (預設 merge)]:method:(merge squash rebase)'
+      '--method[指定 Git 合併方式 (預設 merge)]:method:(merge squash rebase)'
+      '-f[強制合併，略過 Reviewer APPROVED 檢查]'
+      '--force[強制合併，略過 Reviewer APPROVED 檢查]'
+      '-d[預覽檢查 PR 審核與合併狀態，不實際在 GitHub 執行 Merge]'
+      '--dry-run[預覽檢查 PR 審核與合併狀態，不實際在 GitHub 執行 Merge]'
+      '-t[手動指定上線單號 (例如 PMOJBVIP-30282)]:ticket'
+      '--ticket[手動指定上線單號 (例如 PMOJBVIP-30282)]:ticket'
+      '-h[顯示說明訊息]'
+      '--help[顯示說明訊息]'
+    )
+
+    if [[ $CURRENT -eq 2 ]]; then
+      local -a release_branches
+      release_branches=("${(f)$(git branch -a --format='%(refname:short)' 2>/dev/null | grep -E '(^|/)release/' | sed -e 's#^origin/##' | sort -u)}")
+      if [[ ${#release_branches} -gt 0 ]]; then
+        _describe 'release branches or PR URLs' release_branches
+      else
+        _message 'PR 網址、Release 分支、Issue 編號，或留空自動讀取剪貼簿'
+      fi
+    elif [[ $CURRENT -eq 3 ]]; then
+      local -a envs
+      envs=(
+        'staging:預發布環境 (STG)'
+        'develop:開發基準環境 (Develop)'
+        'prod:正式發布環境 (PROD)'
+      )
+      _describe '目標環境' envs
+    else
+      _describe 'options' flags
+    fi
+  }
+
   compdef _pr_scan_autocomplete pr-scan 2>/dev/null || true
   compdef _bulletin_quiz_autocomplete bulletin-quiz 2>/dev/null || true
+  compdef _release_pr_autocomplete release-pr 2>/dev/null || true
+  compdef _merge_pr_autocomplete merge-pr 2>/dev/null || true
 fi
 

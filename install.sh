@@ -26,7 +26,7 @@ done
 
 # 3. 將專案設定檔軟連結至 ~/.config/favorite-bash/
 mkdir -p "${TARGET_CONFIG_DIR}"
-for config_name in pr-scan.json bulletin-quiz.json; do
+for config_name in pr-scan.json bulletin-quiz.json release-pr.json; do
   if [[ -f "${SCRIPT_DIR}/${config_name}" ]]; then
     ln -sf "${SCRIPT_DIR}/${config_name}" "${TARGET_CONFIG_DIR}/${config_name}"
     echo -e "  ${GREEN}✔${RESET} 建立設定檔軟連結: ${TARGET_CONFIG_DIR}/${config_name} -> ${SCRIPT_DIR}/${config_name}"

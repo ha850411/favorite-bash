@@ -525,7 +525,8 @@ try:
                 if ex_pr:
                     pr_num = ex_pr.get("number", "")
                     pr_url = ex_pr.get("url", "")
-                    b_desc = f"{C_CYAN}PR 已存在 (#{pr_num}): {pr_url}{C_RESET}{action_suffix}"
+                    pr_link = f"\033]8;;{pr_url}\a{pr_url}\033]8;;\a" if pr_url else ""
+                    b_desc = f"{C_CYAN}PR 已存在 (#{pr_num}): {pr_link}{C_RESET}{action_suffix}"
                     print(f" {pointer} {status_check} {idx_num}) {repo_name} {C_GREEN}(PR 已存在 #{pr_num}){C_RESET}")
                     print(f"        • 狀態: {b_desc}")
                 elif not item["has_changes"]:
@@ -721,8 +722,9 @@ for item in selected_items:
         pr_url = ex_pr.get("url", "")
         pr_num = ex_pr.get("number", "")
         pr_title_val = ex_pr.get("title", "")
+        pr_link = f"\033]8;;{pr_url}\a{pr_url}\033]8;;\a" if pr_url else pr_url
         print(f"  {C_CYAN}ℹ️ 偵測到 PR 已存在：#{pr_num} ({pr_title_val}){C_RESET}")
-        print(f"  {C_BOLD}🔗 {pr_url}{C_RESET}")
+        print(f"  {C_BOLD}🔗 {pr_link}{C_RESET}")
     else:
         commits = diff.get("commits", [])
         files = diff.get("files", [])
@@ -748,8 +750,9 @@ for item in selected_items:
         pr_res = subprocess.run(gh_cmd, capture_output=True, text=True)
         if pr_res.returncode == 0 and pr_res.stdout.strip():
             pr_url = pr_res.stdout.strip()
+            pr_link = f"\033]8;;{pr_url}\a{pr_url}\033]8;;\a" if pr_url else pr_url
             print(f"  {C_GREEN}✨ PR 建立成功！{C_RESET}")
-            print(f"  {C_BOLD}🔗 {pr_url}{C_RESET}")
+            print(f"  {C_BOLD}🔗 {pr_link}{C_RESET}")
         else:
             err_msg = pr_res.stderr.strip() if pr_res.stderr else "未知錯誤"
             print(f"  {C_RED}❌ PR 建立失敗: {err_msg}{C_RESET}")

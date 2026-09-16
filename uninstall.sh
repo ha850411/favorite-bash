@@ -25,7 +25,7 @@ for cmd_path in "${SCRIPT_DIR}"/bin/*; do
 done
 
 # 2. 移除設定檔軟連結
-for config_name in pr-scan.json bulletin-quiz.json; do
+for config_name in pr-scan.json bulletin-quiz.json release-pr.json; do
   if [[ -L "${TARGET_CONFIG_DIR}/${config_name}" ]]; then
     rm -f "${TARGET_CONFIG_DIR}/${config_name}"
     echo -e "  ${GREEN}✔${RESET} 移除設定檔軟連結: ${TARGET_CONFIG_DIR}/${config_name}"
