@@ -73,32 +73,35 @@ pr-reviews
 ---
 
 ### 3. `pr-scan`
-跨 Repositories 快速預覽分支變更、自動發起 PR 並支援一鍵/自動 Merge。若目標 Branch B 不存在，自動在遠端建立 Branch B。
+跨 Repositories 快速預覽分支變更、自動發起 PR 並支援一鍵/自動 Merge。若目標分支不存在，自動在遠端建立。支援 **`lab` / `stg` / `prod` 三種正式機環境分支規則**與設定檔對應，並原生支援 `104corp/104crm-b` 等 Repo 的 **project** 與 **static** 雙分支獨立發起與合併！
 
 **使用方式：**
 ```bash
-# 基本用法：指定來源分支 A 與目標分支 B (預設開啟自動 Merge)
+# 1. 環境分支發起與合併 (自動對應各 Repo 不同的環境分支名稱)
+pr-scan feature/SERU-12705 lab             # 發起至各 Repo 的 Lab 測試分支 (支援 104crm-b 的 project 與 static)
+pr-scan feature/SERU-12705 stg             # 發起至各 Repo 的 STG (staging) 分支
+pr-scan feature/SERU-12705 prod            # 發起至各 Repo 的 PROD (master/prod) 分支
+pr-scan feature/SERU-12705 -e lab          # 透過 -e/--env 指定環境
+
+# 2. 自訂目標分支 (預設開啟自動 Merge)
 pr-scan feature/SERU-12705 release/SERVICE-0811
 
-# 關閉自動 Merge (僅建立/檢查 PR)
-pr-scan feature/SERU-12705 release/SERVICE-0811 --no-merge
-
-# 指定 Target Branch B 不存在時所使用的 Base 分支
-pr-scan feature/SERU-12705 release/SERVICE-0811 -b develop
-
-# 指定特定 GitHub Repository
-pr-scan -r owner/repo feature/SERU-12705 release/SERVICE-0811
-
-# 自動確認預覽直接執行
-pr-scan feature/SERU-12705 release/SERVICE-0811 -y
+# 3. 常用選項
+pr-scan feature/SERU-12705 lab --no-merge  # 關閉自動 Merge (僅建立/檢查 PR)
+pr-scan feature/SERU-12705 release/SERVICE-0811 -b develop  # 指定建立目標分支時的 Base
+pr-scan -r 104corp/104crm-b feature/SERU-12705 lab         # 僅針對單一 Repository
+pr-scan feature/SERU-12705 lab -y          # 跳過確認直接執行
 ```
 
 **互動介面操作 (單鍵零延遲響應)：**
-- `y` 或 `Enter`: 確認執行選取 Repos
+- `↑` / `↓` (或 `j`/`k`): 上下移動游標選擇 Repo / 任務
+- `←` / `→` (或 `Space`): 勾選 / 取消勾選 (← 取消 / → 勾選 / Space 切換)
+- `a`: 全選 / 全部取消勾選
 - `m`: 零延遲切換「自動 Merge 模式」開關
-- `b`: 選擇並修改某個 Repo 建立 Branch B 時的 Base 分支
-- `1-9`: 即時勾選 / 取消勾選指定 Repo
-- `q`: 退出選單
+- `b`: 選擇並修改某個 Repo 建立目標分支時的 Base 分支
+- `1-9`: 即時勾選 / 取消勾選指定編號
+- `y` 或 `Enter`: 確認執行選取的 Repos / Tasks
+- `q`: 取消並退出
 
 ---
 
@@ -190,33 +193,54 @@ release/SERVICE-0806  -- 104crm-b (前綴完全符合)
 設定檔預設讀取 `~/.config/favorite-bash/pr-scan.json`（或專案目錄下 `pr-scan.json`）：
 ```json
 {
-  "default_target_base": "main",
+  "default_target_base": "develop",
+  "default_environments": {
+    "lab": "lab",
+    "stg": "staging",
+    "prod": "master"
+  },
   "tracked_repos": [
-    "owner/frontend-app",
-    "owner/backend-api"
+    "104corp/104crm-laravel",
+    "104corp/104crm-b"
   ],
   "repos": {
-    "owner/frontend-app": {
-      "default_base": "main",
-      "branch_rules": [
-        { "pattern": "release/hotfix/*", "base": "main" },
-        { "pattern": "release/*", "base": "develop" }
-      ]
-    },
-    "owner/backend-api": {
+    "104corp/104crm-laravel": {
       "default_base": "develop",
+      "environments": {
+        "lab": "lab",
+        "stg": "staging",
+        "prod": "master"
+      }
+    },
+    "104corp/104crm-b": {
+      "default_base": "develop",
+      "has_static": true,
+      "environments": {
+        "lab": "lab/project",
+        "stg": "staging/project",
+        "prod": "prod/project"
+      },
+      "static_environments": {
+        "lab": "lab/static",
+        "stg": "staging/static",
+        "prod": "prod/static"
+      },
       "branch_rules": [
-        { "pattern": "release/v1.*", "base": "v1-legacy" },
-        { "pattern": "release/v2.*", "base": "main" }
+        { "pattern": "*static*", "base": "develop_static" },
+        { "pattern": "release/*", "base": "develop" }
       ]
     }
   }
 }
 ```
 - `default_target_base`: 全域備用 Base 分支。
+- `default_environments`: 全域預設 `lab` / `stg` / `prod` 對應的分支名稱。
 - `repos`: 針對不同 GitHub Repositories 個別設定：
-  - `default_base`: 該 Repo 預設的 Base 分支。
-  - `branch_rules`: 針對該 Repo 內不同的 Target Branch 通配符 Match Pattern (例如 `release/hotfix/*` 或 `release/*`)，各自指定要使用的 Base 分支。
+  - `default_base`: 該 Repo 建立目標分支時預設的 Base 分支。
+  - `environments`: 定義該 Repo 在 `lab`、`stg`、`prod` 三種環境下的正式分支名稱（例如 `staging/project` 或 `master`）。
+  - `has_static`: 設定為 `true` 時，自動將該 Repo 拆分為 **project** 與 **static** 兩個獨立任務併發掃描。
+  - `static_environments`: 定義該 Repo 在 static 分支下的 `lab`、`stg`、`prod` 環境分支名稱（例如 `lab/static`、`staging/static`、`prod/static`）。
+  - `branch_rules`: 針對該 Repo 內不同的 Target Branch 通配符 Match Pattern (例如 `*static*` 或 `release/*`)，各自指定要使用的 Base 分支。
 
 ---
 

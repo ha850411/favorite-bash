@@ -1,5 +1,10 @@
 {
   "default_target_base": "develop",
+  "default_environments": {
+    "lab": "dev",
+    "stg": "staging",
+    "prod": "master"
+  },
   "tracked_repos": [
     "104corp/104crm-laravel",
     "104corp/104crm-laravel-api",
@@ -14,6 +19,11 @@
   "repos": {
     "104corp/104crm-laravel": {
       "default_base": "develop",
+      "environments": {
+        "lab": "dev",
+        "stg": "staging",
+        "prod": "master"
+      },
       "branch_rules": [
         {
           "pattern": "release/*",
@@ -23,6 +33,11 @@
     },
     "104corp/104crm-laravel-api": {
       "default_base": "develop-k8s",
+      "environments": {
+        "lab": "dev-k8s",
+        "stg": "staging-k8s",
+        "prod": "master-k8s"
+      },
       "branch_rules": [
         {
           "pattern": "release/*",
@@ -32,6 +47,11 @@
     },
     "104corp/104crm-laravel-aes": {
       "default_base": "develop",
+      "environments": {
+        "lab": "dev",
+        "stg": "staging",
+        "prod": "master"
+      },
       "branch_rules": [
         {
           "pattern": "release/*",
@@ -41,6 +61,11 @@
     },
     "104corp/104crm-dashboard": {
       "default_base": "develop",
+      "environments": {
+        "lab": "dev",
+        "stg": "staging",
+        "prod": "master"
+      },
       "branch_rules": [
         {
           "pattern": "release/*",
@@ -50,6 +75,17 @@
     },
     "104corp/104crm-b": {
       "default_base": "develop",
+      "has_static": true,
+      "environments": {
+        "lab": "dev/project",
+        "stg": "staging/project",
+        "prod": "prod/project"
+      },
+      "static_environments": {
+        "lab": "dev/static",
+        "stg": "staging/static",
+        "prod": "prod/static"
+      },
       "branch_rules": [
         {
           "pattern": "*static*",
@@ -63,7 +99,22 @@
     },
     "104corp/104crm-c": {
       "default_base": "develop",
+      "has_static": true,
+      "environments": {
+        "lab": "dev/project",
+        "stg": "staging/project",
+        "prod": "prod/project"
+      },
+      "static_environments": {
+        "lab": "dev/static",
+        "stg": "staging/static",
+        "prod": "prod/static"
+      },
       "branch_rules": [
+        {
+          "pattern": "*static*",
+          "base": "develop_static"
+        },
         {
           "pattern": "release/*",
           "base": "develop"
@@ -72,6 +123,11 @@
     },
     "104corp/104crm-wsp-jb-b": {
       "default_base": "develop",
+      "environments": {
+        "lab": "dev/project",
+        "stg": "staging/project",
+        "prod": "prod/project"
+      },
       "branch_rules": [
         {
           "pattern": "release/*",
@@ -81,6 +137,11 @@
     },
     "104corp/104crm-lib": {
       "default_base": "develop",
+      "environments": {
+        "lab": "dev/lib",
+        "stg": "staging/lib",
+        "prod": "prod/lib"
+      },
       "branch_rules": [
         {
           "pattern": "release/*",
@@ -90,6 +151,11 @@
     },
     "104corp/104-service-km": {
       "default_base": "develop",
+      "environments": {
+        "lab": "dev",
+        "stg": "staging",
+        "prod": "prod"
+      },
       "branch_rules": [
         {
           "pattern": "release/*",

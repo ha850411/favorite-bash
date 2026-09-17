@@ -43,6 +43,8 @@ if typeset -f compdef &>/dev/null || autoload -Uz compinit 2>/dev/null; then
     flags=(
       '-r[只針對特定 GitHub Repo]:repo'
       '-b[指定建立 Target Branch B 時的 Base 分支]:base branch'
+      '-e[指定目標環境 (lab / stg / prod)]:target environment:(lab stg prod)'
+      '--env[指定目標環境 (lab / stg / prod)]:target environment:(lab stg prod)'
       '-M[自動 Merge 模式 (預設開啟)]'
       '--no-merge[關閉自動 Merge]'
       '-t[指定 PR 標題]:title'

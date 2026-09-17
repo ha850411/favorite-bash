@@ -136,6 +136,15 @@ def main():
         sys.exit(0)
 
     # Mode 'branch_b'
+    env_suggestions = [
+        ("lab", "Lab 測試環境分支 (各 Repo 自動對應)"),
+        ("stg", "STG 預發布環境分支 (各 Repo 自動對應)"),
+        ("prod", "PROD 正式發布環境分支 (各 Repo 自動對應)"),
+    ]
+    for env_name, env_desc in env_suggestions:
+        if not input_b or env_name.startswith(input_b.lower()) or input_b.lower() in env_name:
+            print(f"{env_name}:{env_desc}")
+
     candidates_by_repo = {}
 
     for repo in all_tracked:
