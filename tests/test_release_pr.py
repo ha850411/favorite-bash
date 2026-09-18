@@ -211,11 +211,16 @@ class ReleasePrTests(unittest.TestCase):
             config.get_target_branch("104corp/104crm-b", "staging", is_static=True),
             "staging/static",
         )
+        self.assertEqual(
+            config.managers,
+            ["cindy006", "yinmax225", "104lindalee"],
+        )
 
     def test_custom_release_config_overrides(self):
         custom_cfg = release_pr.ReleaseConfig(
             default_env="staging",
             default_targets={"develop": "dev", "staging": "stg-main", "prod": "production"},
+            managers=["boss1", "boss2"],
             tracked_repos=["my-org/custom-repo"],
             repos={
                 "my-org/custom-repo": {
@@ -225,6 +230,7 @@ class ReleasePrTests(unittest.TestCase):
                 }
             },
         )
+        self.assertEqual(custom_cfg.managers, ["boss1", "boss2"])
         self.assertTrue(custom_cfg.has_static("my-org/custom-repo"))
         self.assertEqual(
             custom_cfg.get_target_branch("my-org/custom-repo", "staging", is_static=False),
@@ -240,6 +246,200 @@ class ReleasePrTests(unittest.TestCase):
             "production",
         )
 
+    def test_is_stg_or_prod(self):
+        # Canonical env is staging / prod
+        self.assertTrue(release_pr.is_stg_or_prod("staging", "develop"))
+        self.assertTrue(release_pr.is_stg_or_prod("prod", "any_branch"))
+
+        # Target branch contains staging / prod / master keywords
+        self.assertTrue(release_pr.is_stg_or_prod("develop", "staging/project"))
+        self.assertTrue(release_pr.is_stg_or_prod("develop", "staging/static"))
+        self.assertTrue(release_pr.is_stg_or_prod("develop", "prod/project"))
+        self.assertTrue(release_pr.is_stg_or_prod("develop", "master"))
+        self.assertTrue(release_pr.is_stg_or_prod("develop", "master-k8s"))
+
+        # Pure develop branch with develop env
+        self.assertFalse(release_pr.is_stg_or_prod("develop", "develop"))
+        self.assertFalse(release_pr.is_stg_or_prod("develop", "develop_static"))
+        self.assertFalse(release_pr.is_stg_or_prod("develop", "develop-k8s"))
+
+    def test_resolve_task_reviewers(self):
+        managers = ["cindy006", "yinmax225", "104lindalee"]
+
+        # STG/PROD automatically includes all managers
+        revs = release_pr.resolve_task_reviewers(
+            is_stg_prod=True,
+            managers=managers,
+        )
+        self.assertEqual(revs, ["cindy006", "yinmax225", "104lindalee"])
+
+        # STG/PROD merges extra reviewers and ignores duplicates
+        revs_extra = release_pr.resolve_task_reviewers(
+            is_stg_prod=True,
+            managers=managers,
+            user_reviewers="cindy006, extra_dev",
+        )
+        self.assertEqual(revs_extra, ["cindy006", "yinmax225", "104lindalee", "extra_dev"])
+
+        # If author is one of the managers, exclude author
+        revs_self = release_pr.resolve_task_reviewers(
+            is_stg_prod=True,
+            managers=managers,
+            author="cindy006",
+        )
+        self.assertEqual(revs_self, ["yinmax225", "104lindalee"])
+
+        # Develop does NOT automatically include managers unless specified
+        revs_dev = release_pr.resolve_task_reviewers(
+            is_stg_prod=False,
+            managers=managers,
+        )
+        self.assertEqual(revs_dev, [])
+
+        revs_dev_custom = release_pr.resolve_task_reviewers(
+            is_stg_prod=False,
+            managers=managers,
+            user_reviewers="dev_lead",
+        )
+        self.assertEqual(revs_dev_custom, ["dev_lead"])
+
+    @patch("subprocess.run")
+    def test_fetch_pr_reviewer_info(self, mock_run):
+        # PR view response
+        mock_pr_res = MagicMock()
+        mock_pr_res.returncode = 0
+        mock_pr_res.stdout = """{
+            "user": {"login": "dev_author"},
+            "requested_reviewers": [
+                {"login": "cindy006"},
+                {"login": "104lindalee"}
+            ]
+        }"""
+
+        # PR reviews response
+        mock_rev_res = MagicMock()
+        mock_rev_res.returncode = 0
+        mock_rev_res.stdout = """[
+            {"user": {"login": "yinmax225"}, "state": "APPROVED"}
+        ]"""
+
+        mock_run.side_effect = [mock_pr_res, mock_rev_res]
+
+        reviewers, author = release_pr.fetch_pr_reviewer_info("104corp/104crm-b", 1234)
+        self.assertEqual(author, "dev_author")
+        self.assertEqual(reviewers, {"cindy006", "104lindalee", "yinmax225"})
+
+    @patch("subprocess.run")
+    def test_add_pr_reviewers(self, mock_run):
+        mock_res = MagicMock()
+        mock_res.returncode = 0
+        mock_run.return_value = mock_res
+
+        ok = release_pr.add_pr_reviewers("104corp/104crm-b", 1234, ["cindy006", "yinmax225"])
+        self.assertTrue(ok)
+        mock_run.assert_called_once()
+        cmd = mock_run.call_args[0][0]
+        self.assertIn("repos/104corp/104crm-b/pulls/1234/requested_reviewers", cmd[2])
+
+    @patch("release_pr.add_pr_reviewers")
+    @patch("release_pr.fetch_pr_reviewer_info")
+    @patch("release_pr.fetch_existing_pr")
+    @patch("release_pr.scan_repo_issues")
+    @patch("release_pr.check_branch_exists")
+    @patch("subprocess.run")
+    def test_process_repo_task_existing_pr_missing_manager(
+        self,
+        mock_run,
+        mock_check_branch,
+        mock_scan_issues,
+        mock_fetch_existing,
+        mock_fetch_reviewer_info,
+        mock_add_reviewers,
+    ):
+        mock_check_branch.return_value = True
+        mock_scan_issues.return_value = set()
+        mock_fetch_existing.return_value = (
+            "https://github.com/104corp/104crm-b/pull/2025",
+            2025,
+            "Old Title",
+            "OPEN",
+        )
+        # cindy006 and 104lindalee already there, but yinmax225 is missing
+        mock_fetch_reviewer_info.return_value = ({"cindy006", "104lindalee"}, "dev_author")
+        mock_add_reviewers.return_value = True
+
+        mock_edit_res = MagicMock()
+        mock_edit_res.returncode = 0
+        mock_run.return_value = mock_edit_res
+
+        task = release_pr.RepoTask(
+            repo="104corp/104crm-b",
+            is_static=False,
+            head_branch="release/SERVICE-0922",
+            target_branch="staging/project",
+            display_name="104crm-b",
+        )
+
+        res = release_pr.process_repo_task(
+            task=task,
+            pr_title="[STG] 0922 上線列車 PR: PMOJBVIP-30282",
+            ticket_id="PMOJBVIP-30282",
+            canonical_env="staging",
+            managers=["cindy006", "yinmax225", "104lindalee"],
+        )
+
+        self.assertEqual(res.action, "updated")
+        mock_add_reviewers.assert_called_once_with("104corp/104crm-b", 2025, ["yinmax225"])
+        self.assertIn("已補上主管 Reviewer: yinmax225", res.reviewer_status)
+
+    @patch("release_pr.fetch_existing_pr")
+    @patch("release_pr.scan_repo_issues")
+    @patch("release_pr.check_branch_exists")
+    @patch("subprocess.run")
+    def test_process_repo_task_creates_pr_with_managers(
+        self,
+        mock_run,
+        mock_check_branch,
+        mock_scan_issues,
+        mock_fetch_existing,
+    ):
+        mock_check_branch.return_value = True
+        mock_scan_issues.return_value = set()
+        mock_fetch_existing.return_value = None
+
+        mock_create_res = MagicMock()
+        mock_create_res.returncode = 0
+        mock_create_res.stdout = "https://github.com/104corp/104crm-b/pull/2026\n"
+        mock_run.return_value = mock_create_res
+
+        task = release_pr.RepoTask(
+            repo="104corp/104crm-b",
+            is_static=False,
+            head_branch="release/SERVICE-0922",
+            target_branch="staging/project",
+            display_name="104crm-b",
+        )
+
+        res = release_pr.process_repo_task(
+            task=task,
+            pr_title="[STG] 0922 上線列車 PR: PMOJBVIP-30282",
+            ticket_id="PMOJBVIP-30282",
+            canonical_env="staging",
+            managers=["cindy006", "yinmax225", "104lindalee"],
+        )
+
+        self.assertEqual(res.action, "created")
+        self.assertEqual(res.pr_number, 2026)
+        self.assertIn("已加入主管 Reviewer: cindy006, yinmax225, 104lindalee", res.reviewer_status)
+
+        # Verify command had --reviewer args
+        create_cmd = mock_run.call_args[0][0]
+        self.assertIn("--reviewer", create_cmd)
+        indices = [i for i, x in enumerate(create_cmd) if x == "--reviewer"]
+        reviewers_passed = [create_cmd[i + 1] for i in indices]
+        self.assertEqual(reviewers_passed, ["cindy006", "yinmax225", "104lindalee"])
+
 
 if __name__ == "__main__":
     unittest.main()
+

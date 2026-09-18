@@ -5,6 +5,11 @@
     "staging": "staging",
     "prod": "master"
   },
+  "managers": [
+    "cindy006",
+    "yinmax225",
+    "104lindalee"
+  ],
   "tracked_repos": [
     "104corp/104crm-b",
     "104corp/104crm-c",

@@ -372,12 +372,13 @@ https://104corp.atlassian.net/browse/SERU-12827
 **特色：**
 - **多執行緒併發掃描**：使用 `ThreadPoolExecutor` 同時平行掃描所有追蹤的 Repositories，大幅縮減等待時間至數秒內。
 - **自動對齊目標分支**：自動識別 `104crm-b`、`104crm-c`、`104crm-lib`、`104crm-wsp-jb-b`、`104crm-laravel-api` 等不同專案在 `develop` / `staging` / `prod` 下各自的 Base 分支（含 `_static` 靜態分支）。
+- **STG/PROD 自動確認並加入主管 Reviewer**：當目標為 `staging` 或 `prod` 相關分支時，自動確認並將三位主管（`cindy006`、`yinmax225`、`104lindalee`）加入 Reviewer 清單；既有 PR 若有缺漏也會自動補齊 Review 邀請，並於掃描進度中即時顯示確認狀態。主管名單可隨時於 `release-pr.json` 或環境變數 `MANAGERS` 客製化。
 - **智慧 Jira 需求單號偵測**：自動分析該 Release 分支併入的 Feature 分支名稱與 Commits，篩選去重出所有關聯的 `SERU-` 需求單號，自動排除上線單與系統關鍵字。
 - **零按鍵剪貼簿同步**：在 macOS 上執行完成後，自動將排版好的發布通知寫入剪貼簿（`pbcopy`），可直接貼到通訊軟體或討論串。
 
 **設定檔客製化 (`release-pr.json`)：**
 
-本工具支援將所有 Repositories 清單與各環境的目標分支（Base 分支）、靜態分支等規則獨立抽離至 `release-pr.json`（預設位於專案根目錄，亦會軟連結至 `~/.config/favorite-bash/release-pr.json`）。您可以隨時自由調整：
+本工具支援將所有 Repositories 清單與各環境的目標分支（Base 分支）、主管 Reviewer 名單、靜態分支等規則獨立抽離至 `release-pr.json`（預設位於專案根目錄，亦會軟連結至 `~/.config/favorite-bash/release-pr.json`）。您可以隨時自由調整：
 
 ```json
 {
@@ -387,6 +388,11 @@ https://104corp.atlassian.net/browse/SERU-12827
     "staging": "staging",
     "prod": "master"
   },
+  "managers": [
+    "cindy006",
+    "yinmax225",
+    "104lindalee"
+  ],
   "tracked_repos": [
     "104corp/104crm-b",
     "104corp/104crm-c",

@@ -13,7 +13,7 @@ import re
 import shutil
 import subprocess
 import sys
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 
 DEFAULT_REPOS = [
@@ -27,6 +27,12 @@ DEFAULT_REPOS = [
     "104corp/104crm-laravel-aes",
     "104corp/104-service-km",
     "104corp/104-service-docker-image-hub",
+]
+
+DEFAULT_MANAGERS = [
+    "cindy006",
+    "yinmax225",
+    "104lindalee",
 ]
 
 JIRA_KEY_PATTERN = re.compile(r"\b([A-Z][A-Z0-9]+-[0-9]+)\b")
@@ -66,6 +72,7 @@ class RepoScanResult:
     action: str = "skipped"  # "created", "updated", "existing", "no_diff", "skipped", "error"
     error_message: Optional[str] = None
     detected_issues: Set[str] = field(default_factory=set)
+    reviewer_status: Optional[str] = None
 
 
 def load_env_file(path: Path, environ: Dict[str, str]) -> None:
@@ -110,6 +117,7 @@ class ReleaseConfig:
             "prod": "master",
         }
     )
+    managers: List[str] = field(default_factory=lambda: list(DEFAULT_MANAGERS))
     tracked_repos: List[str] = field(default_factory=lambda: list(DEFAULT_REPOS))
     repos: Dict[str, Dict[str, any]] = field(default_factory=dict)
     config_file_path: Optional[Path] = None
@@ -187,12 +195,14 @@ def load_release_config(
                 "prod": "master",
             },
         )
+        managers = data.get("managers", list(DEFAULT_MANAGERS))
         tracked_repos = data.get("tracked_repos", list(DEFAULT_REPOS))
         repos = data.get("repos", {})
 
         return ReleaseConfig(
             default_env=default_env,
             default_targets=default_targets,
+            managers=managers,
             tracked_repos=tracked_repos,
             repos=repos,
             config_file_path=config_file,
@@ -384,16 +394,29 @@ def scan_repo_issues(
     # 1. Compare target_branch...head_branch (only new commits for this release)
     comp_cmd = ["gh", "api", f"repos/{repo}/compare/{target_branch}...{head_branch}"]
     res_comp = subprocess.run(comp_cmd, capture_output=True, text=True)
-    if res_comp.returncode == 0 and res_comp.stdout.strip():
-        try:
-            data = json.loads(res_comp.stdout)
-            for c in data.get("commits", []):
-                msg = c.get("commit", {}).get("message", "")
-                issues |= extract_jira_issues_from_text(msg, ticket_id, head_branch)
-        except Exception:
-            pass
+    if res_comp.returncode != 0 or not res_comp.stdout.strip():
+        return issues
 
-    # 2. PRs targeting/merged into head_branch
+    try:
+        data = json.loads(res_comp.stdout)
+    except Exception:
+        return issues
+
+    commits = data.get("commits", [])
+    ahead_by = data.get("ahead_by", 0)
+    if not commits or ahead_by == 0:
+        return issues
+
+    diff_shas = {c.get("sha") for c in commits if c.get("sha")}
+    pr_numbers_in_commits: Set[int] = set()
+
+    for c in commits:
+        msg = c.get("commit", {}).get("message", "")
+        issues |= extract_jira_issues_from_text(msg, ticket_id, head_branch)
+        for m in re.finditer(r"Merge pull request #(\d+)", msg):
+            pr_numbers_in_commits.add(int(m.group(1)))
+
+    # 2. PRs targeting/merged into head_branch (only scan PRs that are part of the diff commits)
     pr_cmd = [
         "gh",
         "pr",
@@ -407,19 +430,133 @@ def scan_repo_issues(
         "--limit",
         "50",
         "--json",
-        "number,title,headRefName,body",
+        "number,title,headRefName,body,mergeCommit",
     ]
     res_pr = subprocess.run(pr_cmd, capture_output=True, text=True)
     if res_pr.returncode == 0 and res_pr.stdout.strip():
         try:
             prs = json.loads(res_pr.stdout)
             for pr in prs:
-                blob = f"{pr.get('headRefName', '')} {pr.get('title', '')} {pr.get('body', '')}"
-                issues |= extract_jira_issues_from_text(blob, ticket_id, head_branch)
+                pr_num = pr.get("number")
+                merge_oid = (pr.get("mergeCommit") or {}).get("oid")
+                if (merge_oid and merge_oid in diff_shas) or (pr_num in pr_numbers_in_commits):
+                    blob = f"{pr.get('headRefName', '')} {pr.get('title', '')} {pr.get('body', '')}"
+                    issues |= extract_jira_issues_from_text(blob, ticket_id, head_branch)
         except Exception:
             pass
 
     return issues
+
+
+def is_stg_or_prod(canonical_env: str, target_branch: str) -> bool:
+    """Check if target environment or branch is related to staging or prod."""
+    if canonical_env in ("staging", "prod"):
+        return True
+    return bool(re.search(r"(staging|stg|prod|master)", target_branch, re.IGNORECASE))
+
+
+def get_current_github_user() -> Optional[str]:
+    """Get current authenticated GitHub user login."""
+    try:
+        res = subprocess.run(
+            ["gh", "api", "user", "--jq", ".login"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if res.returncode == 0 and res.stdout.strip():
+            return res.stdout.strip()
+    except Exception:
+        pass
+    return None
+
+
+def fetch_pr_reviewer_info(
+    repo: str, pr_number: int
+) -> Tuple[Set[str], Optional[str]]:
+    """Fetch requested reviewers, existing reviews, and author of a PR via GitHub REST API.
+
+    Returns (set_of_reviewer_logins_lowercase, author_login).
+    """
+    reviewers: Set[str] = set()
+    author: Optional[str] = None
+
+    # 1. Fetch PR details (requested_reviewers and author)
+    cmd = ["gh", "api", f"repos/{repo}/pulls/{pr_number}"]
+    res = subprocess.run(cmd, capture_output=True, text=True)
+    if res.returncode == 0 and res.stdout.strip():
+        try:
+            data = json.loads(res.stdout)
+            for r in data.get("requested_reviewers", []):
+                login = r.get("login")
+                if login:
+                    reviewers.add(login.lower())
+            author_obj = data.get("user")
+            if author_obj and author_obj.get("login"):
+                author = author_obj.get("login")
+        except Exception:
+            pass
+
+    # 2. Fetch existing reviews
+    cmd_reviews = ["gh", "api", f"repos/{repo}/pulls/{pr_number}/reviews"]
+    res_reviews = subprocess.run(cmd_reviews, capture_output=True, text=True)
+    if res_reviews.returncode == 0 and res_reviews.stdout.strip():
+        try:
+            reviews_data = json.loads(res_reviews.stdout)
+            for rev in reviews_data:
+                u = rev.get("user")
+                if u and u.get("login"):
+                    reviewers.add(u.get("login").lower())
+        except Exception:
+            pass
+
+    return reviewers, author
+
+
+def add_pr_reviewers(repo: str, pr_number: int, reviewers: Sequence[str]) -> bool:
+    """Request reviews from specified users on an existing PR via GitHub REST API."""
+    clean_reviewers = [r.strip() for r in reviewers if r.strip()]
+    if not clean_reviewers:
+        return True
+    payload = json.dumps({"reviewers": clean_reviewers})
+    cmd = [
+        "gh",
+        "api",
+        f"repos/{repo}/pulls/{pr_number}/requested_reviewers",
+        "-X",
+        "POST",
+        "--input",
+        "-",
+    ]
+    res = subprocess.run(cmd, input=payload, capture_output=True, text=True)
+    return res.returncode == 0
+
+
+def resolve_task_reviewers(
+    is_stg_prod: bool,
+    managers: Sequence[str] = (),
+    user_reviewers: Optional[str] = None,
+    author: Optional[str] = None,
+) -> List[str]:
+    """Resolve ordered unique reviewers for a PR task, omitting author if known."""
+    reviewers: List[str] = []
+    author_lower = author.lower() if author else None
+
+    if is_stg_prod:
+        for m in managers:
+            m_clean = m.strip()
+            if m_clean and m_clean not in reviewers:
+                if not author_lower or m_clean.lower() != author_lower:
+                    reviewers.append(m_clean)
+
+    if user_reviewers:
+        for r in user_reviewers.replace(",", " ").split():
+            r_clean = r.strip()
+            if r_clean and r_clean not in reviewers:
+                if not author_lower or r_clean.lower() != author_lower:
+                    reviewers.append(r_clean)
+
+    return reviewers
 
 
 def process_repo_task(
@@ -428,10 +565,21 @@ def process_repo_task(
     ticket_id: str,
     reviewers: Optional[str] = None,
     dry_run: bool = False,
+    canonical_env: str = "staging",
+    managers: Sequence[str] = (),
+    current_user: Optional[str] = None,
 ) -> RepoScanResult:
     """Check branch, scan issues, and create or update PR."""
     if not check_branch_exists(task.repo, task.head_branch):
         return RepoScanResult(task=task, branch_exists=False, action="skipped")
+
+    target_is_stg_prod = is_stg_or_prod(canonical_env, task.target_branch)
+    task_reviewers = resolve_task_reviewers(
+        is_stg_prod=target_is_stg_prod,
+        managers=managers,
+        user_reviewers=reviewers,
+        author=current_user,
+    )
 
     # Branch exists! Scan for Jira issues
     detected_issues = scan_repo_issues(
@@ -445,6 +593,22 @@ def process_repo_task(
 
     if dry_run:
         if existing:
+            pr_url, pr_num, _, _ = existing
+            rev_status = None
+            if target_is_stg_prod or task_reviewers:
+                existing_revs, pr_author = fetch_pr_reviewer_info(task.repo, pr_num)
+                effective_revs = resolve_task_reviewers(
+                    is_stg_prod=target_is_stg_prod,
+                    managers=managers,
+                    user_reviewers=reviewers,
+                    author=pr_author or current_user,
+                )
+                missing = [r for r in effective_revs if r.lower() not in existing_revs]
+                if missing:
+                    rev_status = f"預計補上主管 Reviewer: {', '.join(missing)}"
+                else:
+                    rev_status = "主管 Reviewer 已確認 ✔" if target_is_stg_prod else "Reviewer 已具備 ✔"
+
             return RepoScanResult(
                 task=task,
                 branch_exists=True,
@@ -452,17 +616,7 @@ def process_repo_task(
                 pr_number=existing[1],
                 action="existing (dry-run)",
                 detected_issues=detected_issues,
-            )
-        # In dry run, check if PR exists in all states (e.g. was merged for this release)
-        any_pr = fetch_existing_pr(task.repo, task.head_branch, task.target_branch, state="all")
-        if any_pr and (ticket_id in any_pr[2] or any_pr[3] == "MERGED"):
-            return RepoScanResult(
-                task=task,
-                branch_exists=True,
-                pr_url=any_pr[0],
-                pr_number=any_pr[1],
-                action=f"{any_pr[3].lower()} (dry-run)",
-                detected_issues=detected_issues,
+                reviewer_status=rev_status,
             )
 
         # Check if there are diffs
@@ -476,12 +630,19 @@ def process_repo_task(
                 ahead_by = 0
 
         if ahead_by > 0:
+            rev_status = None
+            if target_is_stg_prod and task_reviewers:
+                rev_status = f"預計加入主管 Reviewer: {', '.join(task_reviewers)}"
+            elif task_reviewers:
+                rev_status = f"預計加入 Reviewer: {', '.join(task_reviewers)}"
+
             return RepoScanResult(
                 task=task,
                 branch_exists=True,
                 pr_url=f"https://github.com/{task.repo}/pull/(preview)",
                 action="created (dry-run)",
                 detected_issues=detected_issues,
+                reviewer_status=rev_status,
             )
         else:
             return RepoScanResult(
@@ -493,9 +654,39 @@ def process_repo_task(
 
     if existing:
         pr_url, pr_num, _, _ = existing
-        # Update existing PR title and body
-        edit_cmd = ["gh", "pr", "edit", pr_url, "--title", pr_title, "--body", pr_body]
+        # Update existing PR title and body via REST API
+        edit_cmd = [
+            "gh",
+            "api",
+            f"repos/{task.repo}/pulls/{pr_num}",
+            "-X",
+            "PATCH",
+            "-f",
+            f"title={pr_title}",
+            "-f",
+            f"body={pr_body}",
+        ]
         subprocess.run(edit_cmd, capture_output=True, text=True)
+
+        rev_status = None
+        if target_is_stg_prod or task_reviewers:
+            existing_revs, pr_author = fetch_pr_reviewer_info(task.repo, pr_num)
+            effective_revs = resolve_task_reviewers(
+                is_stg_prod=target_is_stg_prod,
+                managers=managers,
+                user_reviewers=reviewers,
+                author=pr_author or current_user,
+            )
+            missing = [r for r in effective_revs if r.lower() not in existing_revs]
+            if missing:
+                ok = add_pr_reviewers(task.repo, pr_num, missing)
+                if ok:
+                    rev_status = f"已補上主管 Reviewer: {', '.join(missing)} ✔"
+                else:
+                    rev_status = f"補上主管 Reviewer 失敗: {', '.join(missing)}"
+            else:
+                rev_status = "主管 Reviewer 已確認 ✔" if target_is_stg_prod else "Reviewer 已具備 ✔"
+
         return RepoScanResult(
             task=task,
             branch_exists=True,
@@ -503,6 +694,7 @@ def process_repo_task(
             pr_number=pr_num,
             action="updated",
             detected_issues=detected_issues,
+            reviewer_status=rev_status,
         )
 
     # Attempt to create PR
@@ -521,35 +713,69 @@ def process_repo_task(
         "--body",
         pr_body,
     ]
-    if reviewers:
-        create_cmd.extend(["--reviewer", reviewers])
+    for reviewer in task_reviewers:
+        create_cmd.extend(["--reviewer", reviewer])
 
     res = subprocess.run(create_cmd, capture_output=True, text=True)
     if res.returncode == 0 and res.stdout.strip():
         pr_url = res.stdout.strip().splitlines()[-1]
+        match = re.search(r"/pull/(\d+)", pr_url)
+        pr_num = int(match.group(1)) if match else None
+
+        rev_status = None
+        if target_is_stg_prod and task_reviewers:
+            rev_status = f"已加入主管 Reviewer: {', '.join(task_reviewers)} ✔"
+        elif task_reviewers:
+            rev_status = f"已加入 Reviewer: {', '.join(task_reviewers)} ✔"
+
         return RepoScanResult(
             task=task,
             branch_exists=True,
             pr_url=pr_url,
+            pr_number=pr_num,
             action="created",
             detected_issues=detected_issues,
+            reviewer_status=rev_status,
         )
 
     # Failed to create: check if branch has no difference or already merged
     err = (res.stderr or res.stdout).strip()
     if "No commits between" in err or "already exists" in err:
+        # Check if there is an open PR (in case it wasn't fetched earlier)
         existing_again = fetch_existing_pr(
-            task.repo, task.head_branch, task.target_branch, state="all"
+            task.repo, task.head_branch, task.target_branch, state="OPEN"
         )
-        if existing_again and (ticket_id in existing_again[2] or existing_again[3] == "MERGED"):
+        if existing_again:
+            pr_url, pr_num, _, _ = existing_again
+            rev_status = None
+            if target_is_stg_prod or task_reviewers:
+                existing_revs, pr_author = fetch_pr_reviewer_info(task.repo, pr_num)
+                effective_revs = resolve_task_reviewers(
+                    is_stg_prod=target_is_stg_prod,
+                    managers=managers,
+                    user_reviewers=reviewers,
+                    author=pr_author or current_user,
+                )
+                missing = [r for r in effective_revs if r.lower() not in existing_revs]
+                if missing:
+                    ok = add_pr_reviewers(task.repo, pr_num, missing)
+                    if ok:
+                        rev_status = f"已補上主管 Reviewer: {', '.join(missing)} ✔"
+                    else:
+                        rev_status = f"補上主管 Reviewer 失敗: {', '.join(missing)}"
+                else:
+                    rev_status = "主管 Reviewer 已確認 ✔" if target_is_stg_prod else "Reviewer 已具備 ✔"
+
             return RepoScanResult(
                 task=task,
                 branch_exists=True,
-                pr_url=existing_again[0],
-                pr_number=existing_again[1],
-                action=existing_again[3].lower(),
+                pr_url=pr_url,
+                pr_number=pr_num,
+                action="updated",
                 detected_issues=detected_issues,
+                reviewer_status=rev_status,
             )
+        # Otherwise, there is genuinely no difference / already merged
         return RepoScanResult(
             task=task,
             branch_exists=True,
@@ -658,6 +884,16 @@ def run_release_pr(
     if not reviewers:
         reviewers = environ.get("REVIEWERS") or environ.get("PR_REVIEWERS")
 
+    env_managers = environ.get("MANAGERS") or environ.get("PR_MANAGERS")
+    if env_managers:
+        configured_managers = [
+            m.strip() for m in env_managers.replace(",", " ").split() if m.strip()
+        ]
+    else:
+        configured_managers = list(config.managers)
+
+    current_user = get_current_github_user()
+
     # Build tasks based on configuration
     tasks: List[RepoTask] = []
     for repo in config.tracked_repos:
@@ -697,6 +933,14 @@ def run_release_pr(
         f"🚀 開始併發掃描 {len(tasks)} 個專案分支...{config_info} (單號: {ticket_id} | 來源: {source_branch} | 環境: {canonical_env})"
     )
 
+    is_any_stg_prod = any(
+        is_stg_or_prod(canonical_env, t.target_branch) for t in tasks
+    )
+    if is_any_stg_prod and configured_managers:
+        print(
+            f"📋 目標分支包含 STG/PROD，自動確認並帶入主管 Reviewer: {', '.join(configured_managers)}"
+        )
+
     results: List[RepoScanResult] = []
     all_detected_issues: Set[str] = set(manual_issues)
 
@@ -709,6 +953,9 @@ def run_release_pr(
                 ticket_id,
                 reviewers,
                 dry_run,
+                canonical_env,
+                configured_managers,
+                current_user,
             ): task
             for task in tasks
         }
@@ -717,8 +964,9 @@ def run_release_pr(
                 res = future.result()
                 results.append(res)
                 all_detected_issues |= res.detected_issues
+                status_suffix = f" ({res.reviewer_status})" if res.reviewer_status else ""
                 if res.branch_exists and res.pr_url:
-                    print(f"  ✔ [{res.action}] {res.task.display_name}: {res.pr_url}")
+                    print(f"  ✔ [{res.action}] {res.task.display_name}: {res.pr_url}{status_suffix}")
                 elif res.branch_exists and res.action == "no_diff":
                     print(
                         f"  ℹ [無變更] {res.task.display_name}: 分支與目標分支無差異，略過建立 PR"
@@ -738,6 +986,11 @@ def run_release_pr(
         if all_detected_issues:
             print(f"偵測到關聯單號：{', '.join(sort_jira_keys(all_detected_issues))}")
         return 0
+
+    if is_any_stg_prod and valid_prs and configured_managers:
+        print(
+            f"\n🛡️  主管審核確認：所有 {env_label} PR 均已確認指派主管名單 ({', '.join(configured_managers)})"
+        )
 
     output_text = format_output_message(
         pr_results=valid_prs,
