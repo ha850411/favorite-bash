@@ -15,7 +15,9 @@ import subprocess
 import sys
 import termios
 import tty
-from concurrent.futures import ThreadPoolExecutor
+import urllib.error
+import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Dict, List, Optional, Tuple
 
 C_CYAN = "\033[1;36m"
@@ -335,7 +337,87 @@ def build_scan_tasks(
     return tasks
 
 
-def fetch_compare_diff(repo: str, head_branch: str, base_branch: str) -> Dict[str, Any]:
+_GH_TOKEN: Optional[str] = None
+
+
+def get_github_token() -> Optional[str]:
+    global _GH_TOKEN
+    if _GH_TOKEN:
+        return _GH_TOKEN
+    token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
+    if token and token.strip():
+        _GH_TOKEN = token.strip()
+        return _GH_TOKEN
+    try:
+        res = subprocess.run(["gh", "auth", "token"], capture_output=True, text=True, timeout=2)
+        if res.returncode == 0 and res.stdout.strip():
+            _GH_TOKEN = res.stdout.strip()
+            os.environ["GH_TOKEN"] = _GH_TOKEN
+            return _GH_TOKEN
+    except Exception:
+        pass
+    return None
+
+
+def http_request_json(
+    url: str,
+    token: Optional[str] = None,
+    data: Optional[Dict[str, Any]] = None,
+    method: Optional[str] = None,
+    timeout: float = 8.0,
+) -> Tuple[int, Any]:
+    if token is None:
+        token = get_github_token()
+    headers = {
+        "User-Agent": "favorite-bash/pr-scan",
+        "Accept": "application/vnd.github.v3+json",
+    }
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    req_data = None
+    if data is not None:
+        req_data = json.dumps(data).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    req = urllib.request.Request(url, data=req_data, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            status = resp.getcode()
+            body = resp.read().decode("utf-8")
+            try:
+                return status, json.loads(body)
+            except Exception:
+                return status, body
+    except urllib.error.HTTPError as e:
+        try:
+            body = e.read().decode("utf-8")
+            return e.code, json.loads(body)
+        except Exception:
+            return e.code, None
+    except Exception:
+        return -1, None
+
+
+def fetch_compare_diff(repo: str, head_branch: str, base_branch: str, token: Optional[str] = None) -> Dict[str, Any]:
+    token = token or get_github_token()
+    if token:
+        status, data = http_request_json(
+            f"https://api.github.com/repos/{repo}/compare/{base_branch}...{head_branch}",
+            token=token,
+        )
+        if status == 200 and isinstance(data, dict):
+            commits = data.get("commits", [])
+            files = data.get("files", [])
+            additions = sum(f.get("additions", 0) for f in files)
+            deletions = sum(f.get("deletions", 0) for f in files)
+            return {
+                "ahead_by": data.get("ahead_by", len(commits)),
+                "commits_count": len(commits),
+                "files_count": len(files),
+                "additions": additions,
+                "deletions": deletions,
+                "commits": commits,
+                "files": files,
+            }
     res = subprocess.run(
         ["gh", "api", f"repos/{repo}/compare/{base_branch}...{head_branch}"],
         capture_output=True,
@@ -370,7 +452,24 @@ def fetch_compare_diff(repo: str, head_branch: str, base_branch: str) -> Dict[st
     }
 
 
-def check_existing_pr(repo: str, head_branch: str, base_branch: str) -> Optional[Dict[str, Any]]:
+def check_existing_pr(
+    repo: str, head_branch: str, base_branch: str, token: Optional[str] = None
+) -> Optional[Dict[str, Any]]:
+    token = token or get_github_token()
+    if token and "/" in repo:
+        owner = repo.split("/")[0]
+        status, prs = http_request_json(
+            f"https://api.github.com/repos/{repo}/pulls?head={owner}:{head_branch}&base={base_branch}&state=open",
+            token=token,
+        )
+        if status == 200 and isinstance(prs, list) and prs:
+            return {
+                "number": prs[0].get("number"),
+                "url": prs[0].get("html_url") or prs[0].get("url"),
+                "title": prs[0].get("title", ""),
+            }
+        elif status == 200 and isinstance(prs, list) and not prs:
+            return None
     res = subprocess.run(
         [
             "gh",
@@ -404,28 +503,40 @@ def scan_single_task(task: Dict[str, Any]) -> Dict[str, Any]:
     repo = task["repo"]
     target_branch = task["target_branch"]
     candidates = task["head_candidates"]
+    token = get_github_token()
 
     head_branch = candidates[0]
     has_a = False
 
     # 檢測候選 Branch A 是否存在於遠端
     for cand in candidates:
-        res_a = subprocess.run(
-            ["gh", "api", f"repos/{repo}/branches/{cand}", "--silent"],
-            capture_output=True,
-        )
-        if res_a.returncode == 0:
-            head_branch = cand
-            has_a = True
-            break
+        if token:
+            st, _ = http_request_json(f"https://api.github.com/repos/{repo}/branches/{cand}", token=token)
+            if st == 200:
+                head_branch = cand
+                has_a = True
+                break
+        else:
+            res_a = subprocess.run(
+                ["gh", "api", f"repos/{repo}/branches/{cand}", "--silent"],
+                capture_output=True,
+            )
+            if res_a.returncode == 0:
+                head_branch = cand
+                has_a = True
+                break
 
     has_b = False
     if has_a:
-        res_b = subprocess.run(
-            ["gh", "api", f"repos/{repo}/branches/{target_branch}", "--silent"],
-            capture_output=True,
-        )
-        has_b = res_b.returncode == 0
+        if token:
+            st, _ = http_request_json(f"https://api.github.com/repos/{repo}/branches/{target_branch}", token=token)
+            has_b = (st == 200)
+        else:
+            res_b = subprocess.run(
+                ["gh", "api", f"repos/{repo}/branches/{target_branch}", "--silent"],
+                capture_output=True,
+            )
+            has_b = res_b.returncode == 0
 
     selected_base = task["selected_base"]
     compare_target = target_branch if has_b else selected_base
@@ -438,10 +549,10 @@ def scan_single_task(task: Dict[str, Any]) -> Dict[str, Any]:
         "files": [],
     }
     if has_a:
-        diff_info = fetch_compare_diff(repo, head_branch, compare_target)
+        diff_info = fetch_compare_diff(repo, head_branch, compare_target, token=token)
 
     has_changes = diff_info["commits_count"] > 0
-    existing_pr = check_existing_pr(repo, head_branch, target_branch) if (has_a and has_b) else None
+    existing_pr = check_existing_pr(repo, head_branch, target_branch, token=token) if (has_a and has_b) else None
 
     task_result = dict(task)
     task_result.update(
@@ -456,6 +567,128 @@ def scan_single_task(task: Dict[str, Any]) -> Dict[str, Any]:
         }
     )
     return task_result
+
+
+def scan_all_tasks(tasks: List[Dict[str, Any]], token: Optional[str] = None) -> List[Dict[str, Any]]:
+    token = token or get_github_token()
+    if not token:
+        with ThreadPoolExecutor(max_workers=min(16, len(tasks))) as executor:
+            return list(executor.map(scan_single_task, tasks))
+
+    chunk_size = 4
+    chunks = [tasks[i:i + chunk_size] for i in range(0, len(tasks), chunk_size)]
+
+    def query_chunk(task_chunk: List[Dict[str, Any]]) -> Dict[str, Any]:
+        parts = ["query {"]
+        for t in task_chunk:
+            i = t["index"]
+            repo = t["repo"]
+            if "/" not in repo:
+                continue
+            owner, name = repo.split("/", 1)
+            target_b = t["target_branch"]
+            selected_b = t["selected_base"]
+            parts.append(f"  task_{i}: repository(owner: {json.dumps(owner)}, name: {json.dumps(name)}) {{")
+            for c_idx, cand in enumerate(t["head_candidates"]):
+                parts.append(
+                    f"    cand_{c_idx}: ref(qualifiedName: {json.dumps('refs/heads/' + cand)}) {{ target {{ oid }} }}"
+                )
+            parts.append(
+                f"    target_ref: ref(qualifiedName: {json.dumps('refs/heads/' + target_b)}) {{ target {{ oid }} }}"
+            )
+            parts.append(
+                f"    base_ref: ref(qualifiedName: {json.dumps('refs/heads/' + selected_b)}) {{ target {{ oid }} }}"
+            )
+            parts.append("  }")
+        parts.append("}")
+        status, res = http_request_json(
+            "https://api.github.com/graphql",
+            token=token,
+            data={"query": "\n".join(parts)},
+            timeout=8.0,
+        )
+        return res.get("data", {}) if status == 200 and isinstance(res, dict) else {}
+
+    with ThreadPoolExecutor(max_workers=min(4, len(chunks))) as ex:
+        chunk_results = list(ex.map(query_chunk, chunks))
+
+    merged = {}
+    for d in chunk_results:
+        if d:
+            merged.update(d)
+
+    task_results = []
+    matched_tasks = []
+    for t in tasks:
+        i = t["index"]
+        t_data = merged.get(f"task_{i}")
+        if t_data is None:
+            # Repo 未在 GraphQL 成功解析，回退單任務處理
+            item_res = scan_single_task(t)
+            task_results.append(item_res)
+            continue
+
+        head_b = t["head_candidates"][0]
+        has_a = False
+        for c_idx, cand in enumerate(t["head_candidates"]):
+            if t_data.get(f"cand_{c_idx}"):
+                head_b = cand
+                has_a = True
+                break
+        has_b = bool(t_data.get("target_ref"))
+        base_sha = (t_data.get("base_ref") or {}).get("target", {}).get("oid", "")
+        item_res = dict(t)
+        item_res.update(
+            {
+                "head_branch": head_b,
+                "has_a": has_a,
+                "has_b": has_b,
+                "base_sha": base_sha,
+                "diff": {
+                    "ahead_by": 0,
+                    "commits_count": 0,
+                    "files_count": 0,
+                    "additions": 0,
+                    "deletions": 0,
+                    "commits": [],
+                    "files": [],
+                },
+                "has_changes": False,
+                "existing_pr": None,
+                "selected": False,
+            }
+        )
+        task_results.append(item_res)
+        if has_a:
+            matched_tasks.append(item_res)
+
+    if matched_tasks:
+        def enrich_diff(item: Dict[str, Any]) -> None:
+            repo = item["repo"]
+            head_branch = item["head_branch"]
+            compare_target = item["target_branch"] if item["has_b"] else item["selected_base"]
+            item["diff"] = fetch_compare_diff(repo, head_branch, compare_target, token=token)
+            item["has_changes"] = item["diff"]["commits_count"] > 0
+
+        def enrich_pr(item: Dict[str, Any]) -> None:
+            if item["has_b"]:
+                item["existing_pr"] = check_existing_pr(
+                    item["repo"], item["head_branch"], item["target_branch"], token=token
+                )
+
+        with ThreadPoolExecutor(max_workers=len(matched_tasks) * 2) as ex:
+            f_diffs = [ex.submit(enrich_diff, it) for it in matched_tasks]
+            f_prs = [ex.submit(enrich_pr, it) for it in matched_tasks]
+            for f in f_diffs + f_prs:
+                try:
+                    f.result()
+                except Exception:
+                    pass
+
+        for it in matched_tasks:
+            it["selected"] = it["has_a"] and (it["has_changes"] or it["existing_pr"] is not None)
+
+    return task_results
 
 
 def get_key() -> str:
@@ -521,6 +754,212 @@ def clear_screen() -> None:
         sys.stdout.flush()
 
 
+def execute_single_task(
+    item: Dict[str, Any],
+    arg_title: str = "",
+    arg_body: str = "",
+    target_env: Optional[str] = None,
+    is_draft: bool = False,
+    do_auto_merge: bool = True,
+    token: Optional[str] = None,
+) -> List[str]:
+    lines = []
+    repo = item["repo"]
+    selected_base = item["selected_base"]
+    has_b = item["has_b"]
+    diff = item["diff"]
+    ex_pr = item["existing_pr"]
+    head_b = item["head_branch"]
+    target_b = item["target_branch"]
+    disp_name = item["display_name"]
+    is_static_item = item["is_static"]
+
+    lines.append("-" * 80)
+    lines.append(f"{C_BOLD}📦 [{disp_name}] ({head_b} ➔ {target_b}){C_RESET}")
+
+    # Step A: 建立遠端目標分支 B (若不存在)
+    if not has_b:
+        base_sha = item.get("base_sha")
+        if not base_sha:
+            token = token or get_github_token()
+            if token:
+                st, ref_data = http_request_json(
+                    f"https://api.github.com/repos/{repo}/git/ref/heads/{selected_base}",
+                    token=token,
+                )
+                if st == 200 and isinstance(ref_data, dict):
+                    base_sha = ref_data.get("object", {}).get("sha", "")
+            if not base_sha:
+                base_sha_res = subprocess.run(
+                    ["gh", "api", f"repos/{repo}/git/ref/heads/{selected_base}", "--jq", ".object.sha"],
+                    capture_output=True,
+                    text=True,
+                )
+                base_sha = base_sha_res.stdout.strip()
+        if not base_sha:
+            lines.append(f"  {C_RED}❌ 錯誤：遠端不存在 Base 分支 \"{selected_base}\"，無法建立 \"{target_b}\"。跳過此項目。{C_RESET}")
+            return lines
+
+        lines.append(f"  {C_CYAN}🔨 正在基於 \"{selected_base}\" ({base_sha[:7]}) 建立遠端分支 \"{target_b}\"...{C_RESET}")
+        created = False
+        token = token or get_github_token()
+        if token:
+            st, _ = http_request_json(
+                f"https://api.github.com/repos/{repo}/git/refs",
+                token=token,
+                data={"ref": f"refs/heads/{target_b}", "sha": base_sha},
+                method="POST",
+            )
+            if st in (200, 201):
+                created = True
+        if not created:
+            create_res = subprocess.run(
+                ["gh", "api", f"repos/{repo}/git/refs", "-f", f"ref=refs/heads/{target_b}", "-f", f"sha={base_sha}", "--silent"]
+            )
+            created = (create_res.returncode == 0)
+
+        if created:
+            lines.append(f"  {C_GREEN}✔ 已成功建立遠端分支 \"{target_b}\" (based on \"{selected_base}\")！{C_RESET}")
+        else:
+            lines.append(f"  {C_RED}❌ 建立遠端分支 \"{target_b}\" 失敗！跳過此項目。{C_RESET}")
+            return lines
+
+    # Step B: PR 建立或偵測
+    pr_url = ""
+    pr_num = None
+
+    if ex_pr:
+        pr_url = ex_pr.get("url", "")
+        pr_num = ex_pr.get("number", "")
+        pr_title_val = ex_pr.get("title", "")
+        pr_link = f"\033]8;;{pr_url}\a{pr_url}\033]8;;\a" if pr_url else pr_url
+        lines.append(f"  {C_CYAN}ℹ️ 偵測到 PR 已存在：#{pr_num} ({pr_title_val}){C_RESET}")
+        lines.append(f"  {C_BOLD}🔗 {pr_link}{C_RESET}")
+    else:
+        commits = diff.get("commits", [])
+        files = diff.get("files", [])
+
+        if arg_title:
+            pr_t = arg_title
+            if is_static_item and "[static]" not in pr_t.lower():
+                pr_t = f"{pr_t} [static]"
+        elif target_env:
+            env_tag = get_env_display_label(target_env)
+            static_tag = " [static]" if is_static_item else ""
+            pr_t = f"[{env_tag}]{static_tag} Merge {head_b} into {target_b}"
+        else:
+            static_tag = " [static]" if is_static_item else ""
+            pr_t = f"Merge {head_b} into {target_b}{static_tag}"
+
+        if arg_body:
+            pr_b = arg_body
+        else:
+            body_lines = [f"## 🔀 Merge `{head_b}` into `{target_b}`", "", "### 📜 Merged Commits:"]
+            for c in commits[:20]:
+                sha = c.get("sha", "")[:7]
+                msg = c.get("commit", {}).get("message", "").split("\n")[0]
+                body_lines.append(f"- [{sha}] {msg}")
+            if len(commits) > 20:
+                body_lines.append(f"- ... and {len(commits) - 20} more commits")
+            pr_b = "\n".join(body_lines)
+
+        lines.append(f"  {C_CYAN}🚀 發起 Pull Request ({len(commits)} commits, {len(files)} files)...{C_RESET}")
+
+        created_pr = False
+        token = token or get_github_token()
+        if token:
+            payload = {
+                "title": pr_t,
+                "body": pr_b,
+                "head": head_b,
+                "base": target_b,
+                "draft": is_draft,
+            }
+            st, pr_data = http_request_json(
+                f"https://api.github.com/repos/{repo}/pulls",
+                token=token,
+                data=payload,
+                method="POST",
+            )
+            if st in (200, 201) and isinstance(pr_data, dict):
+                pr_url = pr_data.get("html_url") or pr_data.get("url", "")
+                pr_num = pr_data.get("number", "")
+                created_pr = True
+
+        if not created_pr:
+            gh_cmd = [
+                "gh",
+                "pr",
+                "create",
+                "--repo",
+                repo,
+                "--head",
+                head_b,
+                "--base",
+                target_b,
+                "--title",
+                pr_t,
+                "--body",
+                pr_b,
+            ]
+            if is_draft:
+                gh_cmd.append("--draft")
+
+            pr_res = subprocess.run(gh_cmd, capture_output=True, text=True)
+            if pr_res.returncode == 0 and pr_res.stdout.strip():
+                pr_url = pr_res.stdout.strip()
+                created_pr = True
+                match = re.search(r"/pull/(\d+)", pr_url)
+                if match:
+                    pr_num = match.group(1)
+            else:
+                err_msg = pr_res.stderr.strip() if pr_res.stderr else "未知錯誤"
+                lines.append(f"  {C_RED}❌ PR 建立失敗: {err_msg}{C_RESET}")
+
+        if created_pr:
+            pr_link = f"\033]8;;{pr_url}\a{pr_url}\033]8;;\a" if pr_url else pr_url
+            lines.append(f"  {C_GREEN}✨ PR 建立成功！{C_RESET}")
+            lines.append(f"  {C_BOLD}🔗 {pr_link}{C_RESET}")
+
+    # Step C: 自動 Merge PR (若有啟用)
+    if do_auto_merge and pr_url:
+        lines.append(f"  {C_CYAN}🔀 正在將 PR 合併進 {target_b}...{C_RESET}")
+        merged_ok = False
+        token = token or get_github_token()
+        if token and pr_num:
+            st, m_data = http_request_json(
+                f"https://api.github.com/repos/{repo}/pulls/{pr_num}/merge",
+                token=token,
+                data={"merge_method": "merge"},
+                method="PUT",
+            )
+            if st == 200 and isinstance(m_data, dict) and m_data.get("merged"):
+                merged_ok = True
+                lines.append(f"  {C_GREEN}✨ PR 已成功合併進 {target_b}！{C_RESET}")
+
+        if not merged_ok:
+            m_res = subprocess.run(
+                ["gh", "pr", "merge", pr_url, "--repo", repo, "--merge"],
+                capture_output=True,
+                text=True,
+            )
+            if m_res.returncode == 0:
+                lines.append(f"  {C_GREEN}✨ PR 已成功合併進 {target_b}！{C_RESET}")
+            else:
+                m_auto = subprocess.run(
+                    ["gh", "pr", "merge", pr_url, "--repo", repo, "--auto", "--merge"],
+                    capture_output=True,
+                    text=True,
+                )
+                if m_auto.returncode == 0:
+                    lines.append(f"  {C_GREEN}✨ PR 已設定為 Auto-Merge！{C_RESET}")
+                else:
+                    m_err = m_res.stderr.strip() if m_res.stderr else "無法執行 Merge"
+                    lines.append(f"  {C_RED}⚠️ 自動 Merge 失敗: {m_err}{C_RESET}")
+
+    return lines
+
+
 def run_pr_scan(
     config_file: str,
     branch_a: str,
@@ -577,8 +1016,7 @@ def run_pr_scan(
         f"{C_CYAN}🔍 正在平行掃描 {len(all_repos)} 個 Repositories ({len(tasks)} 個任務) 中的分支與變更...{env_banner} (設定檔: {config_file}){C_RESET}"
     )
 
-    with ThreadPoolExecutor(max_workers=min(16, len(tasks))) as executor:
-        items = list(executor.map(scan_single_task, tasks))
+    items = scan_all_tasks(tasks)
 
     matched_count = sum(1 for item in items if item["has_a"])
     if matched_count == 0:
@@ -806,130 +1244,28 @@ def run_pr_scan(
         print(f"{C_YELLOW}沒有勾選任何要執行的項目，已結束。{C_RESET}")
         return 0
 
-    # 執行批次建立分支、PR 與 Merge
-    print(f"\n{C_CYAN}🚀 開始批次執行 {len(selected_items)} 個任務的 Branch B 建立、PR 發起與 Merge...{C_RESET}\n")
+    # 執行並行建立分支、PR 與 Merge
+    print(f"\n{C_CYAN}🚀 開始並行執行 {len(selected_items)} 個任務的 Branch B 建立、PR 發起與 Merge...{C_RESET}\n")
 
-    for item in selected_items:
-        repo = item["repo"]
-        selected_base = item["selected_base"]
-        has_b = item["has_b"]
-        diff = item["diff"]
-        ex_pr = item["existing_pr"]
-        head_b = item["head_branch"]
-        target_b = item["target_branch"]
-        disp_name = item["display_name"]
-        is_static_item = item["is_static"]
-
-        print("-" * 80)
-        print(f"{C_BOLD}📦 [{disp_name}] ({head_b} ➔ {target_b}){C_RESET}")
-
-        # Step A: 建立遠端目標分支 B (若不存在)
-        if not has_b:
-            base_sha_res = subprocess.run(
-                ["gh", "api", f"repos/{repo}/git/ref/heads/{selected_base}", "--jq", ".object.sha"],
-                capture_output=True,
-                text=True,
+    token = get_github_token()
+    with ThreadPoolExecutor(max_workers=min(8, len(selected_items))) as executor:
+        futures = [
+            executor.submit(
+                execute_single_task,
+                item=item,
+                arg_title=arg_title,
+                arg_body=arg_body,
+                target_env=target_env,
+                is_draft=is_draft,
+                do_auto_merge=do_auto_merge,
+                token=token,
             )
-            base_sha = base_sha_res.stdout.strip()
-            if not base_sha:
-                print(f"  {C_RED}❌ 錯誤：遠端不存在 Base 分支 \"{selected_base}\"，無法建立 \"{target_b}\"。跳過此項目。{C_RESET}")
-                continue
-
-            print(f"  {C_CYAN}🔨 正在基於 \"{selected_base}\" ({base_sha[:7]}) 建立遠端分支 \"{target_b}\"...{C_RESET}")
-            create_res = subprocess.run(
-                ["gh", "api", f"repos/{repo}/git/refs", "-f", f"ref=refs/heads/{target_b}", "-f", f"sha={base_sha}", "--silent"]
-            )
-            if create_res.returncode == 0:
-                print(f"  {C_GREEN}✔ 已成功建立遠端分支 \"{target_b}\" (based on \"{selected_base}\")！{C_RESET}")
-            else:
-                print(f"  {C_RED}❌ 建立遠端分支 \"{target_b}\" 失敗！跳過此項目。{C_RESET}")
-                continue
-
-        # Step B: PR 建立或偵測
-        pr_url = ""
-        pr_num = None
-
-        if ex_pr:
-            pr_url = ex_pr.get("url", "")
-            pr_num = ex_pr.get("number", "")
-            pr_title_val = ex_pr.get("title", "")
-            pr_link = f"\033]8;;{pr_url}\a{pr_url}\033]8;;\a" if pr_url else pr_url
-            print(f"  {C_CYAN}ℹ️ 偵測到 PR 已存在：#{pr_num} ({pr_title_val}){C_RESET}")
-            print(f"  {C_BOLD}🔗 {pr_link}{C_RESET}")
-        else:
-            commits = diff.get("commits", [])
-            files = diff.get("files", [])
-
-            if arg_title:
-                pr_t = arg_title
-                if is_static_item and "[static]" not in pr_t.lower():
-                    pr_t = f"{pr_t} [static]"
-            elif target_env:
-                env_tag = get_env_display_label(target_env)
-                static_tag = " [static]" if is_static_item else ""
-                pr_t = f"[{env_tag}]{static_tag} Merge {head_b} into {target_b}"
-            else:
-                static_tag = " [static]" if is_static_item else ""
-                pr_t = f"Merge {head_b} into {target_b}{static_tag}"
-
-            if arg_body:
-                pr_b = arg_body
-            else:
-                body_lines = [f"## 🔀 Merge `{head_b}` into `{target_b}`", "", "### 📜 Merged Commits:"]
-                for c in commits[:20]:
-                    sha = c.get("sha", "")[:7]
-                    msg = c.get("commit", {}).get("message", "").split("\n")[0]
-                    body_lines.append(f"- [{sha}] {msg}")
-                if len(commits) > 20:
-                    body_lines.append(f"- ... and {len(commits) - 20} more commits")
-                pr_b = "\n".join(body_lines)
-
-            print(f"  {C_CYAN}🚀 發起 Pull Request ({len(commits)} commits, {len(files)} files)...{C_RESET}")
-            gh_cmd = [
-                "gh",
-                "pr",
-                "create",
-                "--repo",
-                repo,
-                "--head",
-                head_b,
-                "--base",
-                target_b,
-                "--title",
-                pr_t,
-                "--body",
-                pr_b,
-            ]
-            if is_draft:
-                gh_cmd.append("--draft")
-
-            pr_res = subprocess.run(gh_cmd, capture_output=True, text=True)
-            if pr_res.returncode == 0 and pr_res.stdout.strip():
-                pr_url = pr_res.stdout.strip()
-                pr_link = f"\033]8;;{pr_url}\a{pr_url}\033]8;;\a" if pr_url else pr_url
-                print(f"  {C_GREEN}✨ PR 建立成功！{C_RESET}")
-                print(f"  {C_BOLD}🔗 {pr_link}{C_RESET}")
-            else:
-                err_msg = pr_res.stderr.strip() if pr_res.stderr else "未知錯誤"
-                print(f"  {C_RED}❌ PR 建立失敗: {err_msg}{C_RESET}")
-
-        # Step C: 自動 Merge PR (若有啟用)
-        if do_auto_merge and pr_url:
-            print(f"  {C_CYAN}🔀 正在將 PR 合併進 {target_b}...{C_RESET}")
-            m_res = subprocess.run(["gh", "pr", "merge", pr_url, "--repo", repo, "--merge"], capture_output=True, text=True)
-            if m_res.returncode == 0:
-                print(f"  {C_GREEN}✨ PR 已成功合併進 {target_b}！{C_RESET}")
-            else:
-                m_auto = subprocess.run(
-                    ["gh", "pr", "merge", pr_url, "--repo", repo, "--auto", "--merge"],
-                    capture_output=True,
-                    text=True,
-                )
-                if m_auto.returncode == 0:
-                    print(f"  {C_GREEN}✨ PR 已設定為 Auto-Merge！{C_RESET}")
-                else:
-                    m_err = m_res.stderr.strip() if m_res.stderr else "無法執行 Merge"
-                    print(f"  {C_RED}⚠️ 自動 Merge 失敗: {m_err}{C_RESET}")
+            for item in selected_items
+        ]
+        for future in as_completed(futures):
+            task_lines = future.result()
+            if task_lines:
+                print("\n".join(task_lines))
 
     print("")
     print("=" * 80)

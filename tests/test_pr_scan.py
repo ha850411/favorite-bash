@@ -17,7 +17,10 @@ from pr_scan import (
     get_candidate_branches_for_task,
     get_task_default_base,
     build_scan_tasks,
+    scan_all_tasks,
+    execute_single_task,
 )
+from unittest.mock import patch
 
 
 class PrScanCoreTests(unittest.TestCase):
@@ -246,6 +249,129 @@ class PrScanCoreTests(unittest.TestCase):
         self.assertIn("[static]", tasks[2]["display_name"])
         self.assertIn("feature/SERU-12553_static", tasks[2]["head_candidates"])
         self.assertIn("feature/SERU-12553-static", tasks[2]["head_candidates"])
+
+    @patch("pr_scan.http_request_json")
+    def test_scan_all_tasks_mocked(self, mock_http):
+        tasks = [
+            {
+                "index": 1,
+                "repo": "104corp/104crm-laravel",
+                "is_static": False,
+                "display_name": "104corp/104crm-laravel",
+                "head_candidates": ["feature/SERU-12345"],
+                "target_branch": "dev",
+                "default_base": "develop",
+                "selected_base": "develop",
+                "source_label": "Repo 預設",
+            },
+            {
+                "index": 2,
+                "repo": "104corp/104crm-api",
+                "is_static": False,
+                "display_name": "104corp/104crm-api",
+                "head_candidates": ["feature/SERU-12345"],
+                "target_branch": "dev-k8s",
+                "default_base": "develop-k8s",
+                "selected_base": "develop-k8s",
+                "source_label": "Repo 預設",
+            },
+        ]
+
+        def fake_http(url, token=None, data=None, method=None, timeout=8.0):
+            if "graphql" in url:
+                return 200, {
+                    "data": {
+                        "task_1": {
+                            "cand_0": {"target": {"oid": "sha_a_1"}},
+                            "target_ref": {"target": {"oid": "sha_b_1"}},
+                            "base_ref": {"target": {"oid": "sha_base_1"}},
+                        },
+                        "task_2": {
+                            "cand_0": None,
+                            "target_ref": {"target": {"oid": "sha_b_2"}},
+                            "base_ref": {"target": {"oid": "sha_base_2"}},
+                        },
+                    }
+                }
+            elif "compare" in url:
+                return 200, {
+                    "ahead_by": 2,
+                    "commits": [{"sha": "c1", "commit": {"message": "feat: test"}}, {"sha": "c2", "commit": {"message": "fix: bug"}}],
+                    "files": [{"filename": "a.py", "additions": 10, "deletions": 2}],
+                }
+            elif "pulls" in url:
+                return 200, []
+            return 404, None
+
+        mock_http.side_effect = fake_http
+
+        results = scan_all_tasks(tasks, token="test_token")
+        self.assertEqual(len(results), 2)
+
+        # Task 1 should have branch A found and changes detected
+        self.assertTrue(results[0]["has_a"])
+        self.assertTrue(results[0]["has_b"])
+        self.assertTrue(results[0]["has_changes"])
+        self.assertTrue(results[0]["selected"])
+        self.assertEqual(results[0]["diff"]["commits_count"], 2)
+
+        # Task 2 should not have branch A
+        self.assertFalse(results[1]["has_a"])
+        self.assertFalse(results[1]["selected"])
+
+    @patch("pr_scan.http_request_json")
+    def test_execute_single_task_mocked(self, mock_http):
+        item = {
+            "index": 1,
+            "repo": "104corp/104crm-laravel",
+            "is_static": False,
+            "display_name": "104corp/104crm-laravel",
+            "head_branch": "feature/SERU-12345",
+            "target_branch": "dev",
+            "selected_base": "develop",
+            "has_b": False,
+            "base_sha": "sha_base_123",
+            "diff": {
+                "ahead_by": 1,
+                "commits_count": 1,
+                "files_count": 1,
+                "commits": [{"sha": "c1", "commit": {"message": "feat: test"}}],
+                "files": [{"filename": "a.txt"}],
+            },
+            "existing_pr": None,
+        }
+
+        def fake_http(url, token=None, data=None, method=None, timeout=8.0):
+            if "refs" in url:
+                return 201, {"ref": "refs/heads/dev"}
+            elif "pulls/" in url and "merge" in url:
+                return 200, {"merged": True, "message": "Merged"}
+            elif "pulls" in url:
+                return 201, {
+                    "number": 999,
+                    "html_url": "https://github.com/104corp/104crm-laravel/pull/999",
+                    "title": "Merge PR",
+                }
+            return 404, None
+
+        mock_http.side_effect = fake_http
+
+        lines = execute_single_task(
+            item=item,
+            arg_title="",
+            arg_body="",
+            target_env="lab",
+            is_draft=False,
+            do_auto_merge=True,
+            token="test_token",
+        )
+
+        output_text = "\n".join(lines)
+        self.assertIn("104corp/104crm-laravel", output_text)
+        self.assertIn("✔ 已成功建立遠端分支", output_text)
+        self.assertIn("✨ PR 建立成功！", output_text)
+        self.assertIn("pull/999", output_text)
+        self.assertIn("✨ PR 已成功合併進 dev！", output_text)
 
 
 if __name__ == "__main__":

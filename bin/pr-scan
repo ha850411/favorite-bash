@@ -139,6 +139,10 @@ if ! command -v gh &>/dev/null; then
   exit 1
 fi
 
+if [[ -z "$GH_TOKEN" && -z "$GITHUB_TOKEN" ]]; then
+  export GH_TOKEN="$(gh auth token 2>/dev/null || true)"
+fi
+
 _pr_scan_ensure_config
 current_config_file="$(_pr_scan_find_config_file)"
 

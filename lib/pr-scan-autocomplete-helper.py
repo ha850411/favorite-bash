@@ -80,8 +80,71 @@ def get_cached_remote_branches(tracked_repos, config_path):
     # Non-blocking background fetch if missing or stale
     if is_stale and tracked_repos:
         try:
-            bg_cmd = f"python3 -c \"import json, time, subprocess, sys, os; from concurrent.futures import ThreadPoolExecutor; repos={tracked_repos}; fetch=lambda r: (r, subprocess.run(['gh', 'api', f'repos/{{r}}/branches?per_page=100', '--jq', '.[].name'], capture_output=True, text=True, timeout=5).stdout.splitlines()); results=dict(ThreadPoolExecutor(max_workers=min(16, len(repos))).map(fetch, repos)); open('{cache_path}', 'w').write(json.dumps({{'timestamp': time.time(), 'repos': results}}))\" &"
-            os.system(bg_cmd)
+            bg_code = f"""
+import json, time, subprocess, sys, os, urllib.request
+
+cache_path = {repr(cache_path)}
+tracked_repos = {repr(tracked_repos)}
+
+token = os.environ.get('GH_TOKEN') or os.environ.get('GITHUB_TOKEN')
+if not token:
+    try:
+        res = subprocess.run(['gh', 'auth', 'token'], capture_output=True, text=True, timeout=2)
+        if res.returncode == 0:
+            token = res.stdout.strip()
+    except Exception:
+        pass
+
+results = {{}}
+
+if token:
+    query_parts = ['query {{']
+    for i, r in enumerate(tracked_repos):
+        if '/' in r:
+            o, n = r.split('/', 1)
+            query_parts.append(f'  r{{i}}: repository(owner: {{json.dumps(o)}}, name: {{json.dumps(n)}}) {{ refs(refPrefix: \"refs/heads/\", first: 100, orderBy: {{field: TAG_COMMIT_DATE, direction: DESC}}) {{ nodes {{ name }} }} }}')
+    query_parts.append('}}')
+
+    req = urllib.request.Request(
+        'https://api.github.com/graphql',
+        data=json.dumps({{'query': '\\n'.join(query_parts)}}).encode('utf-8'),
+        headers={{'Authorization': f'Bearer {{token}}', 'Content-Type': 'application/json', 'User-Agent': 'favorite-bash/autocomplete'}}
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            data = json.loads(resp.read().decode('utf-8')).get('data', {{}})
+            for i, r in enumerate(tracked_repos):
+                repo_data = data.get(f'r{{i}}') or {{}}
+                nodes = repo_data.get('refs', {{}}).get('nodes', [])
+                if nodes:
+                    results[r] = [node['name'] for node in nodes if 'name' in node]
+    except Exception:
+        pass
+
+if not results:
+    from concurrent.futures import ThreadPoolExecutor
+    def fetch_fallback(r):
+        try:
+            lines = subprocess.run(['gh', 'api', f'repos/{{r}}/branches?per_page=100', '--jq', '.[].name'], capture_output=True, text=True, timeout=5).stdout.splitlines()
+            return r, lines
+        except Exception:
+            return r, []
+    with ThreadPoolExecutor(max_workers=min(16, len(tracked_repos))) as ex:
+        results = dict(ex.map(fetch_fallback, tracked_repos))
+
+try:
+    with open(cache_path, 'w', encoding='utf-8') as f:
+        json.dump({{'timestamp': time.time(), 'repos': results}}, f)
+except Exception:
+    pass
+"""
+            subprocess.Popen(
+                [sys.executable, "-c", bg_code],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
         except Exception:
             pass
 
