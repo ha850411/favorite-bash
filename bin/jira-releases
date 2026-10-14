@@ -1,0 +1,13 @@
+#!/usr/bin/env python3
+"""Query Jira release issues from filter 42752 via local Jira MCP or REST API."""
+
+from pathlib import Path
+import sys
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(PROJECT_ROOT / "lib"))
+
+from jira_releases import main  # noqa: E402
+
+if __name__ == "__main__":
+    raise SystemExit(main(project_root=PROJECT_ROOT))

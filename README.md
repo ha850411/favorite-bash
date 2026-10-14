@@ -332,3 +332,46 @@ bulletin-quiz --schedule run
 # 停用並移除排程
 bulletin-quiz --schedule disable
 ```
+
+---
+
+### 6. `jira-releases` (別名: `jira-release`)
+
+快速查詢 104 Jira 上線單（預設 Filter: `42752`）。支援本地 Jira MCP（Streamable HTTP 快速查詢）與 Jira REST API 雙模式自動容錯切換。
+
+**特色：**
+- 預設優先篩選出進行中（`staging 作業中`、`線上作業中`、`測試中` 等）的上線單，排除已結案/已取消的單號。
+- 終端彩色狀態標籤，清楚對齊單號、狀態、負責人、更新時間與上線單主旨。
+- 支援關鍵字搜尋（單號、專案名、日期）、自訂 Filter、狀態篩選與直接以瀏覽器開啟。
+
+**使用方式：**
+
+```bash
+# 1. 查詢目前進行中的上線單 (預設 Filter: 42752)
+jira-releases
+# 或簡寫
+jira-release
+
+# 2. 依關鍵字搜尋 (支援單號、日期、主旨或負責人)
+jira-releases 獵派
+jira-releases 10/27
+jira-releases 30930
+
+# 3. 依狀態關鍵字過濾
+jira-releases -s staging
+jira-releases -s 線上
+
+# 4. 顯示所有單號 (包含已結案與已取消)
+jira-releases -a
+
+# 5. 直接在瀏覽器開啟 Jira Filter 或指定單號
+jira-releases -o
+jira-releases PMOJBVIP-30930 -o
+
+# 6. 自訂 Filter ID 或 JQL
+jira-releases -f 12345
+jira-releases -q "project = SERU AND status = 'In Progress'"
+
+# 7. 輸出 JSON 格式供 pipe 處理
+jira-releases --json
+```
