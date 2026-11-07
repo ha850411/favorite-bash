@@ -1,0 +1,345 @@
+#!/usr/bin/env python3
+"""Update Codex, close tmux sessions, and remove unused superseded packages."""
+
+import argparse
+from contextlib import contextmanager, ExitStack
+import fcntl
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import signal
+import subprocess
+import sys
+import tempfile
+import time
+
+
+INSTALLER_URL = "https://chatgpt.com/codex/install.sh"
+FAMILIES = ("standalone", "app-server-daemon")
+RELEASE_NAME = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+[A-Za-z0-9._+-]*$")
+SCRIPT = Path(__file__).resolve()
+
+
+def say(message):
+    print(message, flush=True)
+
+
+@contextmanager
+def lock(path, blocking=True):
+    fd = os.open(str(path), os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "a") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
+        yield
+
+
+def inventory(task_root):
+    packages = task_root / "packages"
+    if packages.is_symlink():
+        raise RuntimeError("packages 是符號連結，停止清理以避免越界。")
+    releases, selected, families = set(), set(), []
+    for family in FAMILIES:
+        base = packages / family
+        if not base.exists() and not base.is_symlink():
+            continue
+        directory = base / "releases"
+        if base.is_symlink() or directory.is_symlink() or not directory.is_dir():
+            raise RuntimeError("套件目錄結構不符，停止清理：" + str(base))
+        families.append(base)
+        for name in ("current", ".migration-current"):
+            pointer = base / name
+            if name != "current" and not pointer.exists() and not pointer.is_symlink():
+                continue
+            if not pointer.is_symlink():
+                raise RuntimeError("缺少有效版本指標：" + str(pointer))
+            target = pointer.resolve(strict=True)
+            if (target.parent != directory or not target.is_dir()
+                    or not RELEASE_NAME.fullmatch(target.name)):
+                raise RuntimeError("版本指標超出 releases 目錄：" + str(pointer))
+            selected.add(target)
+        for entry in directory.iterdir():
+            if (RELEASE_NAME.fullmatch(entry.name) and entry.is_dir()
+                    and not entry.is_symlink()):
+                releases.add(entry)
+    return releases, selected, families
+
+
+def scan_active_releases(releases):
+    active = set()
+    prefixes = [(str(path) + "/", path) for path in releases]
+
+    def mark(target):
+        target = target.removesuffix(" (deleted)")
+        for prefix, path in prefixes:
+            if target == str(path) or target.startswith(prefix):
+                active.add(path)
+
+    for proc in Path("/proc").iterdir():
+        if not proc.name.isdigit():
+            continue
+        try:
+            stat = (proc / "stat").read_text()
+            if stat[stat.rfind(")") + 2:].split()[0] in ("Z", "X"):
+                continue  # Exited processes have already released their files.
+            if os.geteuid() != 0 and proc.stat().st_uid != os.geteuid():
+                # A Codex started as another account can still reference these files.
+                if (proc / "comm").read_text().strip().startswith("codex"):
+                    mark(os.readlink(proc / "exe"))
+                continue
+            for item in ("exe", "cwd"):
+                try:
+                    mark(os.readlink(proc / item))
+                except FileNotFoundError:
+                    pass
+            with (proc / "maps").open() as maps:
+                for line in maps:
+                    fields = line.split(None, 5)
+                    if len(fields) == 6:
+                        mark(fields[5].strip())
+            for descriptor in (proc / "fd").iterdir():
+                try:
+                    mark(os.readlink(descriptor))
+                except FileNotFoundError:
+                    pass
+        except (FileNotFoundError, ProcessLookupError):
+            continue
+        except PermissionError as error:
+            raise RuntimeError("無法確認程序是否使用套件，暫不刪除：PID " + proc.name) from error
+    return active
+
+
+def active_releases(releases):
+    try:
+        return scan_active_releases(releases)
+    except RuntimeError:
+        if os.geteuid() == 0 or shutil.which("sudo") is None:
+            raise
+        # Inspect protected SSH/container processes with read-only elevation.
+        # Package deletion and installation still run as the invoking user.
+        result = subprocess.run(
+            ["sudo", "-n", sys.executable, "-B", str(SCRIPT), "--scan-active",
+             json.dumps(sorted(str(path) for path in releases))],
+            capture_output=True, text=True)
+        if result.returncode:
+            raise RuntimeError("無法取得完整程序檢查結果，保留舊套件。")
+        observed = {Path(path) for path in json.loads(result.stdout)}
+        if not observed.issubset(releases):
+            raise RuntimeError("程序檢查結果不符，保留舊套件。")
+        return observed
+
+
+def allocated_bytes(path):
+    total = 0
+    for parent, directories, files in os.walk(path, followlinks=False):
+        if os.path.ismount(parent):
+            raise RuntimeError("套件內含掛載點，停止清理：" + parent)
+        for name in files:
+            total += (Path(parent) / name).lstat().st_blocks * 512
+    return total
+
+
+def clean_releases(task_root, candidates=None):
+    _, _, families = inventory(task_root)
+    with ExitStack() as locks:
+        # Share the official installer's locks so its current pointers cannot race us.
+        for base in families:
+            locks.enter_context(lock(base / "install.lock"))
+        releases, selected, _ = inventory(task_root)
+        active = active_releases(releases)
+        pending = []
+        removed_bytes = 0
+        for path in sorted(releases - selected):
+            relative = str(path.relative_to(task_root / "packages"))
+            if candidates is not None and relative not in candidates:
+                continue
+            if path in active:
+                pending.append(relative)
+                continue
+            size = allocated_bytes(path)
+            shutil.rmtree(path)
+            removed_bytes += size
+            say("已清理舊版：" + relative)
+        if removed_bytes:
+            say("本次清理套件約 {:.2f} GiB。".format(removed_bytes / 1024**3))
+        return pending
+
+
+def save_pending(task_root, candidates):
+    destination = task_root / "codex-update-pending.json"
+    if not candidates:
+        destination.unlink(missing_ok=True)
+        return
+    with tempfile.NamedTemporaryFile(mode="w", dir=task_root,
+                                     prefix=".codex-update-pending-", delete=False) as stream:
+        temporary = Path(stream.name)
+        json.dump(sorted(candidates), stream)
+        stream.write("\n")
+    try:
+        os.replace(temporary, destination)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def tmux_sessions():
+    if shutil.which("tmux") is None:
+        return []
+    result = subprocess.run(["tmux", "list-sessions", "-F", "#{session_name}"],
+                            capture_output=True, text=True)
+    if result.returncode:
+        if "no server running" in result.stderr or "No such file or directory" in result.stderr:
+            return []
+        raise RuntimeError("無法讀取 tmux 狀態：" + result.stderr.strip())
+    return result.stdout.splitlines()
+
+
+def close_tmux():
+    sessions = tmux_sessions()
+    if sessions:
+        say("關閉 tmux 的所有 session：" + "、".join(sessions))
+        subprocess.run(["tmux", "kill-server"], check=True)
+    else:
+        say("目前沒有 tmux session。")
+
+
+def download_installer(destination):
+    subprocess.run(["curl", "--fail", "--silent", "--show-error", "--location",
+                    "--retry", "2", "--connect-timeout", "15", "--max-time", "120",
+                    "--output", str(destination), INSTALLER_URL], check=True)
+    if not destination.is_file() or destination.stat().st_size == 0:
+        raise RuntimeError("安裝程式下載為空，取消更新。")
+
+
+def verify_install(task_root):
+    inventory(task_root)
+    selected = (task_root / "packages" / "standalone" / "current").resolve(strict=True)
+    binary = selected / "bin" / "codex"
+    if not binary.is_file():
+        binary = selected / "codex"
+    result = subprocess.run([str(binary), "--version"], check=True,
+                            capture_output=True, text=True, timeout=30)
+    version = result.stdout.strip().split()[-1] if result.stdout.strip() else ""
+    if not version or not selected.name.startswith(version + "-"):
+        raise RuntimeError("新版執行檔驗證失敗，保留所有舊套件。")
+    say("新版驗證成功：" + result.stdout.strip())
+
+
+def background(task_root, arguments):
+    destination = task_root / "codex-update.log"
+    with destination.open("a") as logfile:
+        process = subprocess.Popen([sys.executable, "-B", str(SCRIPT), *arguments],
+                                   stdin=subprocess.DEVNULL, stdout=logfile,
+                                   stderr=subprocess.STDOUT, start_new_session=True,
+                                   close_fds=True)
+    return process.pid
+
+
+def perform_update(task_root, release=None):
+    with lock(task_root / "codex-update.lock", blocking=False):
+        with tempfile.TemporaryDirectory(prefix="codex-update-") as folder:
+            installer = Path(folder) / "install.sh"
+            say("下載官方 Codex 安裝程式…")
+            download_installer(installer)
+            close_tmux()
+            environment = dict(os.environ, CODEX_NON_INTERACTIVE="1")
+            # This user command updates the CLI, not the installer's internal daemon mode.
+            for key in ("CODEX_INSTALL_DAEMON_ONLY", "CODEX_INSTALL_DEFER_SELECTION",
+                        "CODEX_INSTALL_IF_CURRENT", "CODEX_INSTALL_IF_LATEST",
+                        "CODEX_UPDATE_FROM_RELEASE"):
+                environment.pop(key, None)
+            command = ["sh", str(installer)]
+            if release:
+                command.extend(["--release", release])
+            subprocess.run(command, env=environment, check=True)
+            verify_install(task_root)
+            pending = clean_releases(task_root)
+            save_pending(task_root, pending)
+        if pending:
+            say("其餘舊套件仍被程序使用，退出後會在背景自動清理：")
+            for item in pending:
+                say("  " + item)
+            background(task_root, ["--watch-cleanup"])
+        say("Codex 更新完成。tmux session 不會自動重開。")
+
+
+def watch_cleanup(task_root):
+    try:
+        with lock(task_root / "codex-update-cleanup.lock", blocking=False):
+            while True:
+                time.sleep(60)
+                with lock(task_root / "codex-update.lock"):
+                    destination = task_root / "codex-update-pending.json"
+                    if not destination.exists():
+                        return
+                    candidates = set(json.loads(destination.read_text()))
+                    pending = clean_releases(task_root, candidates)
+                    save_pending(task_root, pending)
+                    if not pending:
+                        say("仍被使用的舊套件已退出，延後清理完成。")
+                        return
+    except BlockingIOError:
+        return  # Another watcher is already responsible for the persisted queue.
+
+
+def preview(task_root):
+    sessions = tmux_sessions()
+    say("預覽模式：不更新、不關閉 tmux、不刪除檔案。")
+    say("更新時將關閉的 tmux session：" + ("、".join(sessions) or "無"))
+    releases, selected, _ = inventory(task_root)
+    active = active_releases(releases)
+    total = 0
+    for path in sorted(releases):
+        relative = str(path.relative_to(task_root / "packages"))
+        if path in selected:
+            say("保留目前版本：" + relative)
+        elif path in active:
+            say("程序退出後清理：" + relative)
+        else:
+            total += allocated_bytes(path)
+            say("安裝成功後清理：" + relative)
+    say("目前未使用的舊套件約 {:.2f} GiB。".format(total / 1024**3))
+
+
+def main():
+    parser = argparse.ArgumentParser(description="關閉所有 tmux session，更新 Codex，成功後清理舊套件。")
+    parser.add_argument("--release", help="安裝指定版本；預設使用官方 latest")
+    parser.add_argument("--dry-run", action="store_true", help="只預覽，不更新、關閉 session 或刪檔")
+    parser.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--watch-cleanup", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--scan-active", help=argparse.SUPPRESS)
+    args = parser.parse_args()
+    if args.scan_active is not None:
+        paths = {Path(path) for path in json.loads(args.scan_active)}
+        print(json.dumps(sorted(str(path) for path in scan_active_releases(paths))))
+        return
+    task_root = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex").expanduser().resolve()
+    if args.dry_run:
+        preview(task_root)
+        return
+    if not shutil.rmtree.avoids_symlink_attacks:
+        raise RuntimeError("此 Python 不支援安全目錄刪除，取消更新。")
+    task_root.mkdir(parents=True, exist_ok=True)
+    if args.worker or args.watch_cleanup:
+        signal.signal(signal.SIGHUP, signal.SIG_IGN)
+    if args.watch_cleanup:
+        watch_cleanup(task_root)
+    elif os.environ.get("TMUX") and not args.worker:
+        say("更新將轉到背景，接著關閉所有 tmux session。")
+        say("進度紀錄：" + str(task_root / "codex-update.log"))
+        arguments = ["--worker"]
+        if args.release:
+            arguments.extend(["--release", args.release])
+        background(task_root, arguments)
+    else:
+        perform_update(task_root, args.release)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except BlockingIOError:
+        say("已有 codex-update 正在執行，本次取消。")
+        sys.exit(1)
+    except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as error:
+        print("codex-update 失敗：" + str(error), file=sys.stderr, flush=True)
+        sys.exit(1)

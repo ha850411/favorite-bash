@@ -375,3 +375,31 @@ jira-releases -q "project = SERU AND status = 'In Progress'"
 # 7. 輸出 JSON 格式供 pipe 處理
 jira-releases --json
 ```
+
+---
+
+### 7. `codex-update`
+
+更新 Codex，成功驗證新版後清理未使用的舊套件。執行更新時會關閉目前使用者的所有 tmux sessions，完成後不會自動重開；仍被程序使用的舊套件會保留，並在程序退出後由背景工作清理。
+
+**環境需求：** Linux（透過 `/proc` 檢查套件使用狀態）、Python 3.9 以上、`curl`，以及使用官方安裝程式建立的 Codex 套件目錄。若有安裝 `tmux`，會一併處理其 sessions。當程序資訊受到權限限制時，會嘗試透過 `sudo -n` 唯讀檢查；無法完整檢查時保留舊套件。
+
+**使用方式：**
+
+```bash
+# 預覽 tmux sessions、保留版本與可清理的舊套件，不進行更新或刪除
+codex-update --dry-run
+
+# 更新至官方 latest，關閉所有 tmux sessions 並清理舊套件
+codex-update
+
+# 安裝指定版本
+codex-update --release <版本號>
+
+# 顯示說明
+codex-update --help
+```
+
+預設使用 `~/.codex`，可透過 `CODEX_HOME` 指定其他目錄。在 tmux 內執行時會自動轉到背景，進度寫入 `$CODEX_HOME/codex-update.log`（預設 `~/.codex/codex-update.log`）。待清理清單保存在同目錄的 `codex-update-pending.json`。
+
+執行 `./install.sh` 即會將此指令軟連結至 `~/.local/bin/codex-update`；`./uninstall.sh` 會移除該軟連結。
